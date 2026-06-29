@@ -19,6 +19,12 @@ local EVENTS: { string } = {
 	-- Lot 04 — Serveur -> client : instantané autoritaire des ressources du joueur
 	-- (Essence, coûts/recharges des actions, chronomètre du tour). Affichage seul.
 	"CombatResourcesChanged",
+	-- Lot 05 — Client -> serveur : résultat saisi d'un QTE offensif (action + positions
+	-- des curseurs). Le serveur recalcule le verdict de façon autoritaire.
+	"PlayerOffensiveQte",
+	-- Lot 05 — Serveur -> client : verdict autoritaire du QTE offensif (résultat,
+	-- multiplicateur, dégâts) pour l'affichage et l'animation d'échec.
+	"OffensiveQteOutcome",
 }
 
 local FUNCTIONS: { string } = {

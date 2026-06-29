@@ -11,6 +11,8 @@ local Config = {
 	Epeiste = require(script.EpeisteConfig),
 	Creatures = require(script.CreaturesConfig),
 	UI = require(script.UIConfig),
+	-- Lot 05 — Profils du QTE offensif (curseurs, vitesse, zones, espacement).
+	Qte = require(script.QteConfig),
 }
 
 return Config

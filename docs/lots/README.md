@@ -58,7 +58,7 @@ juste pour le hash.
 | 02 | Moteur de combat et tours | TERMINÉ | 01 | | 2026-06-29 |
 | 03 | Interface de combat | TERMINÉ | 02 | | 2026-06-29 |
 | 04 | Essence, actions et cooldowns | TERMINÉ | 02, 03 | | 2026-06-29 |
-| 05 | QTE offensif | EN ATTENTE DU LOT PRÉCÉDENT | 03, 04 | | 2026-06-29 |
+| 05 | QTE offensif | TERMINÉ | 03, 04 | | 2026-06-29 |
 | 06 | QTE défensif, Garde et Méditer | EN ATTENTE DU LOT PRÉCÉDENT | 03, 04 | | 2026-06-29 |
 | 07 | Épéiste niveau 1 | EN ATTENTE DU LOT PRÉCÉDENT | 04, 05, 06 | | 2026-06-29 |
 | 08 | Loup, Bandit et IA | EN ATTENTE DU LOT PRÉCÉDENT | 02, 05, 06 | | 2026-06-29 |

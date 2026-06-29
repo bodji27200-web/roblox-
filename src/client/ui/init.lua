@@ -21,12 +21,16 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared:WaitForChild("Config"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
+-- Lot 05 — Résolution partagée des profils de QTE offensif (action -> profil).
+local Qte = require(Shared:WaitForChild("Qte"))
 
 local CombatUIState = require(script:WaitForChild("CombatUIState"))
 local HUD = require(script:WaitForChild("HUD"))
 local ActionMenu = require(script:WaitForChild("ActionMenu"))
 local TurnOrder = require(script:WaitForChild("TurnOrder"))
 local CenterZone = require(script:WaitForChild("CenterZone"))
+-- Lot 05 — Contrôleur du QTE offensif (rendu de la barre + saisie des curseurs).
+local OffensiveQte = require(script.Parent:WaitForChild("qte"))
 
 local UI = Config.UI
 
@@ -72,6 +76,13 @@ function CombatUI.new()
 		self:_onActionChosen(actionId)
 	end)
 
+	-- Lot 05 — QTE offensif. `_qteActive` (pendant la saisie) et `_actionPending`
+	-- (action envoyée, en attente de résolution serveur) verrouillent le menu pour
+	-- éviter une seconde action dans le même tour.
+	self.qte = OffensiveQte.new(gui)
+	self._qteActive = false
+	self._actionPending = false
+
 	-- Abonnements : chaque composant se redessine quand l'état change.
 	self.state:subscribe(function(data)
 		self.hud:render(data)
@@ -79,7 +90,8 @@ function CombatUI.new()
 		self.centerZone:render(data)
 		-- Lot 04 — Badges coût/recharge depuis l'instantané serveur, puis activation.
 		self.actionMenu:setActions(data.actions)
-		self.actionMenu:setEnabled(data.canAct)
+		-- Lot 05 — Menu verrouillé pendant un QTE ou tant que l'action n'est pas résolue.
+		self.actionMenu:setEnabled(data.canAct and not self._qteActive and not self._actionPending)
 	end)
 
 	-- Nom du personnage (donnée réellement disponible côté client).
@@ -117,12 +129,36 @@ function CombatUI:_onServerState(payload: { [string]: any })
 		if message then
 			self.state:pushMessage(message)
 		end
+		-- Lot 05 — Nouveau tour de choix : on rouvre le menu (verrous réinitialisés).
+		if newState == "ChoosingAction" then
+			self._actionPending = false
+			self._qteActive = false
+		end
 	end
 	self:_refreshTurnOrder(newState)
+	self:_refreshMenu()
 end
 
--- Le joueur a cliqué/tapé une action : on la transmet au serveur (autoritaire).
+-- Lot 05 — Réapplique l'état d'activation du menu d'après les verrous courants.
+-- (L'abonnement d'état ne se déclenche que sur changement ; ces verrous changent aussi
+-- en dehors d'un message serveur, par exemple à la fin d'un QTE.)
+function CombatUI:_refreshMenu()
+	local data = self.state:get()
+	self.actionMenu:setEnabled(data.canAct and not self._qteActive and not self._actionPending)
+end
+
+-- Le joueur a cliqué/tapé une action. Une action offensive (profil de QTE) déclenche
+-- d'abord le QTE ; les autres sont transmises directement au serveur (autoritaire).
 function CombatUI:_onActionChosen(actionId: string)
+	if self._qteActive or self._actionPending then
+		return
+	end
+
+	if Qte.profileForAction(actionId) then
+		self:_startOffensiveQte(actionId)
+		return
+	end
+
 	local ok, remote = pcall(function()
 		return Remotes.get("PlayerCombatAction")
 	end)
@@ -131,6 +167,50 @@ function CombatUI:_onActionChosen(actionId: string)
 	end
 	-- Retour visuel local immédiat (le serveur reste seul juge du résultat).
 	self.state:pushMessage(("Action choisie : %s"):format(actionId))
+end
+
+-- Lot 05 — Lance le QTE offensif puis envoie les positions des curseurs au serveur.
+function CombatUI:_startOffensiveQte(actionId: string)
+	self._qteActive = true
+	self._actionPending = true
+	self:_refreshMenu()
+	self.state:pushMessage("QTE : arrêtez chaque curseur dans la zone.")
+
+	self.qte:run(actionId, function(payload)
+		self._qteActive = false
+		if payload then
+			local ok, remote = pcall(function()
+				return Remotes.get("PlayerOffensiveQte")
+			end)
+			if ok and remote and remote:IsA("RemoteEvent") then
+				remote:FireServer(payload)
+			end
+		else
+			-- Aucun QTE à jouer (sécurité) : on relâche le verrou d'action.
+			self._actionPending = false
+		end
+		self:_refreshMenu()
+	end)
+end
+
+-- Lot 05 — Verdict autoritaire du QTE offensif reçu du serveur (affichage seul).
+function CombatUI:_onOffensiveOutcome(payload: { [string]: any })
+	if type(payload) ~= "table" then
+		return
+	end
+	local outcome = payload.outcome
+	local damage = if type(payload.damage) == "number" then payload.damage else 0
+	local message
+	if outcome == "Perfect" then
+		message = ("Attaque parfaite ! +20 % (%d dégâts)."):format(damage)
+	elseif outcome == "Normal" then
+		message = ("Attaque normale (%d dégâts)."):format(damage)
+	elseif outcome == "Cancelled" then
+		message = "Attaque annulée — ressources et tour perdus."
+	else
+		message = "QTE offensif résolu."
+	end
+	self.state:pushMessage(message)
 end
 
 -- Démarre l'UI : parente le ScreenGui et écoute le serveur.
@@ -160,6 +240,16 @@ function CombatUI:start()
 			if type(payload) == "table" then
 				self.state:applyResources(payload)
 			end
+		end)
+	end
+
+	-- Lot 05 — Verdict autoritaire du QTE offensif (affichage du résultat/dégâts).
+	local okQte, qteRemote = pcall(function()
+		return Remotes.get("OffensiveQteOutcome")
+	end)
+	if okQte and qteRemote and qteRemote:IsA("RemoteEvent") then
+		qteRemote.OnClientEvent:Connect(function(payload)
+			self:_onOffensiveOutcome(payload)
 		end)
 	end
 

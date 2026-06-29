@@ -22,4 +22,17 @@ ui:start()
 -- Exposé pour les tests manuels (Studio) : _G.CombatUI:simulate({ hp = 18, ... }).
 _G.CombatUI = ui
 
-print("[Client] Interface de combat prête (lot 03).")
+-- Lot 05 — Outil développeur : ralentir/accélérer le QTE offensif pendant les tests.
+-- Exemples : _G.OffensiveQte.setSpeed(0.5) ralentit ; _G.OffensiveQte.setSpeed(2) accélère.
+_G.OffensiveQte = {
+	setSpeed = function(multiplier: number): number
+		local applied = ui.qte:setSpeedMultiplier(multiplier)
+		print(("[OffensiveQte] Vitesse du QTE réglée à x%.2f."):format(applied))
+		return applied
+	end,
+	getSpeed = function(): number
+		return ui.qte:getSpeedMultiplier()
+	end,
+}
+
+print("[Client] Interface de combat prête (lot 03) ; QTE offensif prêt (lot 05).")
