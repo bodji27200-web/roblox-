@@ -79,8 +79,21 @@ function CombatService.init()
 		end)
 	end
 
+	-- Lot 05 (sécurité) — Demande de démarrage d'un QTE offensif (RemoteFunction). Le
+	-- serveur valide le tour et renvoie un défi unique, ou un refus explicite.
+	local qteRequest = Remotes.getFunction("RequestOffensiveQte")
+	if qteRequest:IsA("RemoteFunction") then
+		qteRequest.OnServerInvoke = function(player: Player, action: any)
+			local session = sessionsByPlayer[player]
+			if session then
+				return session:requestOffensiveQte(player, action)
+			end
+			return { accepted = false, reason = "no-session" }
+		end
+	end
+
 	-- Lot 05 — Route le résultat d'un QTE offensif vers la session du joueur. Le serveur
-	-- recalcule le verdict (validation raisonnable) avant d'appliquer les conséquences.
+	-- valide le défi puis recalcule le verdict avant d'appliquer les conséquences.
 	local qteRemote = Remotes.get("PlayerOffensiveQte")
 	if qteRemote:IsA("RemoteEvent") then
 		qteRemote.OnServerEvent:Connect(function(player: Player, payload: any)

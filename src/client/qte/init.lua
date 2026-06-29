@@ -55,9 +55,9 @@ function OffensiveQte:isRunning(): boolean
 	return self._running
 end
 
--- Lance le QTE offensif pour une action et appelle `onComplete(payload)` à la fin.
--- payload = { action, cursors = { { stopped, position }, ... } }, ou nil si l'action
--- n'a pas de profil de QTE (rien à jouer).
+-- Lance le QTE offensif pour une action et appelle `onComplete(result)` à la fin.
+-- result = { cursors = { { stopped, position }, ... }, duration = secondes }, ou nil si
+-- l'action n'a pas de profil de QTE (rien à jouer).
 function OffensiveQte:run(action: string, onComplete: (any) -> ())
 	if self._running then
 		return
@@ -70,16 +70,20 @@ function OffensiveQte:run(action: string, onComplete: (any) -> ())
 
 	self._running = true
 	task.spawn(function()
-		local cursors = self:_play(profile)
+		local cursors, duration = self:_play(profile)
 		self._running = false
-		onComplete({ action = action, cursors = cursors })
+		onComplete({ cursors = cursors, duration = duration })
 	end)
 end
 
--- Déroule tous les curseurs du profil et renvoie le tableau des saisies.
-function OffensiveQte:_play(profile: OffensiveQteProfile): { any }
+-- Déroule tous les curseurs du profil et renvoie (saisies, durée physique en secondes).
+function OffensiveQte:_play(profile: OffensiveQteProfile): ({ any }, number)
 	local bar = self._bar
 	bar:mount(profile)
+
+	-- Mesure de la durée physique réelle du QTE (du premier curseur jusqu'au verdict),
+	-- transmise au serveur pour une validation raisonnable du timing.
+	local playStart = os.clock()
 
 	local cursors = {}
 	local cancelledEarly = false
@@ -119,6 +123,7 @@ function OffensiveQte:_play(profile: OffensiveQteProfile): { any }
 		positions[i] = (cursor.stopped and cursor.position) or nil
 	end
 	local verdict = Qte.computeOutcome(profile, positions)
+	local duration = os.clock() - playStart
 	bar:hideCursor()
 	bar:setVerdict(verdict.outcome)
 	if verdict.cancelled then
@@ -129,7 +134,7 @@ function OffensiveQte:_play(profile: OffensiveQteProfile): { any }
 	task.wait(0.7)
 	bar:unmount()
 
-	return cursors
+	return cursors, duration
 end
 
 -- Anime un curseur de gauche à droite ; renvoie la position d'arrêt [0,1] au clic,

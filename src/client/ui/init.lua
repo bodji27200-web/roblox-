@@ -34,6 +34,10 @@ local OffensiveQte = require(script.Parent:WaitForChild("qte"))
 
 local UI = Config.UI
 
+-- Lot 05 — Bonus d'attaque parfaite affiché, dérivé de la configuration (jamais écrit en
+-- dur) : source unique Config.Combat.PERFECT_ATTACK_DAMAGE_BONUS.
+local PERFECT_BONUS_PERCENT = math.floor(Config.Combat.PERFECT_ATTACK_DAMAGE_BONUS * 100 + 0.5)
+
 -- Libellés français des phases de combat (messages de la zone centrale).
 local STATE_MESSAGES: { [string]: string } = {
 	Starting = "Le combat commence !",
@@ -169,21 +173,54 @@ function CombatUI:_onActionChosen(actionId: string)
 	self.state:pushMessage(("Action choisie : %s"):format(actionId))
 end
 
--- Lot 05 — Lance le QTE offensif puis envoie les positions des curseurs au serveur.
+-- Lot 05 (sécurité) — Demande d'abord un défi au serveur (autoritaire), puis joue le
+-- QTE et soumet les positions accompagnées du challengeId. Le verrou est posé avant la
+-- requête (qui cède la main) pour empêcher tout double-déclenchement, et relâché si le
+-- serveur refuse ou si rien n'est joué — `_actionPending` ne reste jamais bloqué.
 function CombatUI:_startOffensiveQte(actionId: string)
-	self._qteActive = true
 	self._actionPending = true
+	self:_refreshMenu()
+
+	-- Requête synchrone du défi (RemoteFunction). Toute erreur/refus relâche le verrou.
+	local ok, response = pcall(function()
+		local remote = Remotes.getFunction("RequestOffensiveQte")
+		if remote and remote:IsA("RemoteFunction") then
+			return remote:InvokeServer(actionId)
+		end
+		return nil
+	end)
+
+	if not ok or type(response) ~= "table" or response.accepted ~= true then
+		local reason = (type(response) == "table" and response.reason) or "indisponible"
+		self.state:pushMessage(("QTE refusé par le serveur (%s)."):format(tostring(reason)))
+		self._qteActive = false
+		self._actionPending = false
+		self:_refreshMenu()
+		return
+	end
+
+	local challengeId = response.challengeId
+	self._qteActive = true
 	self:_refreshMenu()
 	self.state:pushMessage("QTE : arrêtez chaque curseur dans la zone.")
 
-	self.qte:run(actionId, function(payload)
+	self.qte:run(actionId, function(result)
 		self._qteActive = false
-		if payload then
-			local ok, remote = pcall(function()
-				return Remotes.get("PlayerOffensiveQte")
+		if result then
+			local sent = pcall(function()
+				local remote = Remotes.get("PlayerOffensiveQte")
+				if remote and remote:IsA("RemoteEvent") then
+					remote:FireServer({
+						challengeId = challengeId,
+						action = actionId,
+						cursors = result.cursors,
+						duration = result.duration,
+					})
+				end
 			end)
-			if ok and remote and remote:IsA("RemoteEvent") then
-				remote:FireServer(payload)
+			if not sent then
+				-- Échec d'envoi : relâche le verrou pour ne pas bloquer le joueur.
+				self._actionPending = false
 			end
 		else
 			-- Aucun QTE à jouer (sécurité) : on relâche le verrou d'action.
@@ -193,16 +230,27 @@ function CombatUI:_startOffensiveQte(actionId: string)
 	end)
 end
 
--- Lot 05 — Verdict autoritaire du QTE offensif reçu du serveur (affichage seul).
+-- Lot 05 — Réponse autoritaire du serveur au QTE offensif (affichage seul). Couvre les
+-- deux cas : verdict accepté (résultat/dégâts) et refus explicite (déblocage du menu).
 function CombatUI:_onOffensiveOutcome(payload: { [string]: any })
 	if type(payload) ~= "table" then
 		return
 	end
+
+	-- Refus explicite : le tour n'a pas été consommé, on relâche le verrou pour rejouer.
+	if payload.accepted == false then
+		self._qteActive = false
+		self._actionPending = false
+		self.state:pushMessage(("QTE rejeté par le serveur (%s)."):format(tostring(payload.reason)))
+		self:_refreshMenu()
+		return
+	end
+
 	local outcome = payload.outcome
 	local damage = if type(payload.damage) == "number" then payload.damage else 0
 	local message
 	if outcome == "Perfect" then
-		message = ("Attaque parfaite ! +20 % (%d dégâts)."):format(damage)
+		message = ("Attaque parfaite ! +%d %% (%d dégâts)."):format(PERFECT_BONUS_PERCENT, damage)
 	elseif outcome == "Normal" then
 		message = ("Attaque normale (%d dégâts)."):format(damage)
 	elseif outcome == "Cancelled" then

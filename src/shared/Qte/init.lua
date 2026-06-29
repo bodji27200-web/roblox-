@@ -52,7 +52,7 @@ end
 -- Calcule le résultat d'un QTE offensif à partir des positions arrêtées.
 -- `positions` : tableau de longueur profile.cursorCount, chaque entrée number|nil.
 -- Règles (validées) :
---   * tous en jaune                         -> Perfect (+20 %) ;
+--   * tous en jaune                         -> Perfect (bonus parfait configuré) ;
 --   * aucun hors zone et au plus un rouge   -> Normal ;
 --   * deux rouges ou plus                   -> Cancelled ;
 --   * au moins un hors zone                 -> Cancelled (annulation immédiate côté UI).

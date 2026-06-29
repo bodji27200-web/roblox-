@@ -12,7 +12,7 @@
 --   * `redHalfWidth`    : demi-largeur de la zone rouge (toujours > jaune).
 --   * au-delà de la zone rouge : « hors zone » (annulation).
 --
--- Le bonus de l'attaque parfaite (+20 %) reste la source unique dans
+-- Le bonus de l'attaque parfaite reste la source unique dans
 -- `CombatConfig.PERFECT_ATTACK_DAMAGE_BONUS` : on ne le duplique pas ici.
 
 local QteConfig = {
@@ -28,6 +28,17 @@ local QteConfig = {
 		DEFAULT_SPEED_MULTIPLIER = 1,
 		MIN_SPEED_MULTIPLIER = 0.1,
 		MAX_SPEED_MULTIPLIER = 5,
+	},
+
+	-- Sécurité du flux de défi (challenge) du QTE offensif (côté serveur).
+	Challenge = {
+		-- Marge ajoutée à la durée théorique du QTE (au plus lent réglage dev) pour
+		-- fixer l'expiration du défi : tolère la latence et le ralenti dev, tout en
+		-- rejetant les défis rejoués bien plus tard.
+		EXTRA_SECONDS = 5,
+		-- Durée physique minimale plausible d'un QTE complet (anti-soumission instantanée
+		-- d'un client forgé). Volontairement basse : un joueur rapide reste accepté.
+		MIN_PHYSICAL_SECONDS = 0.05,
 	},
 
 	-- Profils de QTE offensif (réutilisables). La zone jaune est toujours plus petite
