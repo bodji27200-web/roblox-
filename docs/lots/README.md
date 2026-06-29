@@ -54,7 +54,7 @@ juste pour le hash.
 
 | Lot | Titre | Statut | Dépend de | Hash commit | MAJ |
 |-----|-------|--------|-----------|-------------|-----|
-| 01 | Fondation du prototype de combat | TODO (PRÊT À EXÉCUTER) | — | | 2026-06-29 |
+| 01 | Fondation du prototype de combat | TERMINÉ | — | | 2026-06-29 |
 | 02 | Moteur de combat et tours | EN ATTENTE DU LOT PRÉCÉDENT | 01 | | 2026-06-29 |
 | 03 | Interface de combat | EN ATTENTE DU LOT PRÉCÉDENT | 02 | | 2026-06-29 |
 | 04 | Essence, actions et cooldowns | EN ATTENTE DU LOT PRÉCÉDENT | 02, 03 | | 2026-06-29 |
