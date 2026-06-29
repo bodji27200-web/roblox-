@@ -165,13 +165,15 @@ function CombatSession:_beginPersonalTurn(participant: CombatParticipant)
 	self:_grantEssence(participant, Essence.GAIN_PER_PERSONAL_TURN)
 end
 
--- Valide qu'une action est utilisable par un combattant : Essence suffisante et
--- recharge écoulée. Les actions sans règle (ex. « Attendre » de l'ennemi, « Fuite »)
--- sont toujours autorisées. Renvoie (autorisé, raison?) ; la raison sert aux logs.
+-- Valide qu'une action soumise par le client est utilisable : action connue
+-- (déclarée en configuration), Essence suffisante et recharge écoulée. Renvoie
+-- (autorisé, raison?) ; la raison sert aux logs. Les cinq actions du menu sont
+-- toutes déclarées dans ActionRules ; toute autre valeur est forgée et refusée.
 function CombatSession:_canUseAction(participant: CombatParticipant, action: string): (boolean, string?)
 	local rule = ActionRules[action]
 	if not rule then
-		return true, nil
+		-- Refus strict d'une action inconnue (hors menu autorisé / soumission forgée).
+		return false, "unknown"
 	end
 	if (participant.cooldowns[action] or 0) > 0 then
 		return false, "cooldown"
@@ -207,8 +209,13 @@ function CombatSession:_applyActionResources(participant: CombatParticipant, act
 	self:_grantEssence(participant, gain)
 
 	-- 3) Armer la recharge (comptée en tours personnels du combattant).
+	-- La recharge est décomptée au DÉBUT de chacun des tours personnels SUIVANTS
+	-- (l'action est jouée pendant CE tour, dont le début est déjà passé). On arme
+	-- donc à C+1 pour que l'action reste indisponible pendant C tours personnels
+	-- complets (tours N+1..N+C) et redevienne disponible au tour N+C+1.
+	-- Ex. recharge 2 : indisponible aux tours N+1 et N+2, disponible au tour N+3.
 	if rule.cooldownPersonalTurns > 0 then
-		participant.cooldowns[action] = rule.cooldownPersonalTurns
+		participant.cooldowns[action] = rule.cooldownPersonalTurns + 1
 	end
 end
 
@@ -274,6 +281,10 @@ function CombatSession:start()
 
 	self:_setupScene()
 	self:_fireState()
+	-- Instantané initial des ressources dès le démarrage du combat : l'UI affiche
+	-- l'Essence de départ et la disponibilité des actions depuis des données serveur
+	-- fiables, sans attendre le premier tour personnel.
+	self:_firePlayerResources()
 
 	-- La boucle tourne dans sa propre coroutine : le timer de tour peut y céder
 	-- la main sans bloquer le reste du serveur.
