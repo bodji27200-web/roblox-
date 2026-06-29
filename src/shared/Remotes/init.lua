@@ -16,6 +16,9 @@ local EVENTS: { string } = {
 	"CombatStateChanged",
 	-- Client -> serveur : le joueur soumet son action de tour (validée serveur).
 	"PlayerCombatAction",
+	-- Lot 04 — Serveur -> client : instantané autoritaire des ressources du joueur
+	-- (Essence, coûts/recharges des actions, chronomètre du tour). Affichage seul.
+	"CombatResourcesChanged",
 }
 
 local FUNCTIONS: { string } = {

@@ -41,6 +41,15 @@ function CenterZone.new(parent: Instance)
 	list.VerticalAlignment = Enum.VerticalAlignment.Bottom
 	list.Parent = frame
 
+	-- Lot 04 — Chronomètre du tour (durée restante), masqué hors tour du joueur.
+	local timer = Helpers.label("TurnTimer", "", Fonts.Value, 20)
+	timer.TextColor3 = Palette.Accent
+	timer.TextXAlignment = Enum.TextXAlignment.Center
+	timer.Size = UDim2.new(1, 0, 0, 24)
+	timer.Visible = false
+	timer.LayoutOrder = 0
+	timer.Parent = frame
+
 	-- Emplacement QTE (placeholder, masqué tant qu'aucun combat n'est en cours).
 	local qte = Helpers.panel("QtePlaceholder")
 	qte.BackgroundTransparency = 0.4
@@ -78,7 +87,20 @@ function CenterZone.new(parent: Instance)
 	self.instance = frame
 	self._qte = qte
 	self._log = log
+	self._timer = timer
 	return self
+end
+
+-- Lot 04 — Met à jour le chronomètre du tour (durée restante en secondes), piloté
+-- par l'horloge serveur synchronisée. `secondsRemaining = nil` masque le chronomètre.
+function CenterZone:setTimer(secondsRemaining: number?)
+	local timer = self._timer
+	if secondsRemaining == nil then
+		timer.Visible = false
+		return
+	end
+	timer.Visible = true
+	timer.Text = Labels.TurnTimer:format(math.max(0, math.ceil(secondsRemaining)))
 end
 
 function CenterZone:render(data)

@@ -18,6 +18,12 @@ local Config = require(Shared:WaitForChild("Config"))
 
 local UI = Config.UI
 local ESSENCE_MAX = Config.Essence.MAX
+-- Valeurs temporaires du prototype affichées tant que le serveur n'a rien répliqué.
+-- Centralisées en configuration : aucune duplication en dur ici.
+local ESSENCE_START = Config.Essence.START_OF_COMBAT
+local EPEISTE_MAX_HP = Config.Epeiste.STATS.MAX_HP
+local SOUL_FRAGMENTS = UI.SOUL_FRAGMENTS
+local TURN_SECONDS = Config.Combat.TURN_CHOICE_SECONDS
 
 export type TurnEntry = {
 	name: string,
@@ -44,6 +50,13 @@ export type DisplayState = {
 	gold: number,
 	crystals: number,
 
+	-- Lot 04 — Données de ressources répliquées (affichage des coûts/recharges/durée).
+	-- Par action : { cost, cooldownRemaining, available }. Vide tant qu'aucun combat.
+	actions: { [string]: any },
+	-- Horodatage serveur synchronisé de fin du tour (chronomètre), ou nil hors tour.
+	turnEndsAt: number?,
+	turnSeconds: number,
+
 	turnOrder: { TurnEntry },
 	messages: { string },
 }
@@ -69,13 +82,19 @@ local function defaultData(): DisplayState
 
 		characterName = "—",
 		masteryLevel = UI.DEFAULT_MASTERY_LEVEL,
-		hp = 0,
-		maxHp = 0,
-		essence = 0,
+		-- Valeurs temporaires du prototype (PV 30/30, Essence 0/6, 3 fragments d'âme)
+		-- issues de la configuration, en attendant la réplication serveur.
+		hp = EPEISTE_MAX_HP,
+		maxHp = EPEISTE_MAX_HP,
+		essence = ESSENCE_START,
 		essenceMax = ESSENCE_MAX,
-		soulFragments = 0,
+		soulFragments = SOUL_FRAGMENTS,
 		gold = 0,
 		crystals = 0,
+
+		actions = {},
+		turnEndsAt = nil,
+		turnSeconds = TURN_SECONDS,
 
 		turnOrder = {},
 		messages = {},
@@ -143,9 +162,41 @@ function CombatUIState.applyDisplay(self: State, partial: { [string]: any })
 	-- Bornage défensif des valeurs visibles (évite des barres incohérentes).
 	data.essenceMax = math.max(1, data.essenceMax)
 	data.essence = math.clamp(data.essence, 0, data.essenceMax)
+	-- PV : les PV affichés ne dépassent jamais les PV maximum.
+	-- maxHp > 0 -> hp borné entre 0 et maxHp ; maxHp <= 0 -> affichage neutre (0).
 	data.maxHp = math.max(0, data.maxHp)
-	data.hp = math.clamp(data.hp, 0, math.max(data.maxHp, data.hp))
+	if data.maxHp > 0 then
+		data.hp = math.clamp(data.hp, 0, data.maxHp)
+	else
+		data.hp = 0
+	end
 	data.soulFragments = math.clamp(data.soulFragments, 0, UI.SOUL_FRAGMENTS)
+	self:_notify()
+end
+
+-- Applique l'instantané de ressources répliqué par le serveur (lot 04).
+-- Payload : { essence, essenceMax, turnEndsAt, turnSeconds, actions }. Robuste aux
+-- champs manquants. C'est la source autoritaire de l'Essence et des coûts/recharges
+-- affichés (l'API de simulation reste réservée aux tests manuels Studio).
+function CombatUIState.applyResources(self: State, payload: { [string]: any })
+	local data = self._data
+	if type(payload.essence) == "number" then
+		data.essence = payload.essence
+	end
+	if type(payload.essenceMax) == "number" then
+		data.essenceMax = payload.essenceMax
+	end
+	data.turnEndsAt = if type(payload.turnEndsAt) == "number" then payload.turnEndsAt else nil
+	if type(payload.turnSeconds) == "number" then
+		data.turnSeconds = payload.turnSeconds
+	end
+	if type(payload.actions) == "table" then
+		data.actions = payload.actions
+	end
+
+	-- Bornage défensif identique à applyDisplay (cohérence d'affichage).
+	data.essenceMax = math.max(1, data.essenceMax)
+	data.essence = math.clamp(data.essence, 0, data.essenceMax)
 	self:_notify()
 end
 

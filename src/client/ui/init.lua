@@ -15,6 +15,8 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared:WaitForChild("Config"))
@@ -75,6 +77,8 @@ function CombatUI.new()
 		self.hud:render(data)
 		self.turnOrder:render(data)
 		self.centerZone:render(data)
+		-- Lot 04 — Badges coût/recharge depuis l'instantané serveur, puis activation.
+		self.actionMenu:setActions(data.actions)
 		self.actionMenu:setEnabled(data.canAct)
 	end)
 
@@ -146,6 +150,30 @@ function CombatUI:start()
 			self:_onServerState(payload)
 		end)
 	end
+
+	-- Lot 04 — Instantané autoritaire des ressources (Essence, coûts, recharges, durée).
+	local okRes, resRemote = pcall(function()
+		return Remotes.get("CombatResourcesChanged")
+	end)
+	if okRes and resRemote and resRemote:IsA("RemoteEvent") then
+		resRemote.OnClientEvent:Connect(function(payload)
+			if type(payload) == "table" then
+				self.state:applyResources(payload)
+			end
+		end)
+	end
+
+	-- Lot 04 — Chronomètre du tour : décompte local piloté par l'horloge serveur
+	-- synchronisée (turnEndsAt). Affiché seulement pendant la phase de choix du joueur.
+	self._timerConn = RunService.Heartbeat:Connect(function()
+		local data = self.state:get()
+		local endsAt = data.turnEndsAt
+		if data.canAct and type(endsAt) == "number" then
+			self.centerZone:setTimer(endsAt - Workspace:GetServerTimeNow())
+		else
+			self.centerZone:setTimer(nil)
+		end
+	end)
 end
 
 -- API de test manuel (Studio) : injecter des valeurs d'affichage sans serveur.

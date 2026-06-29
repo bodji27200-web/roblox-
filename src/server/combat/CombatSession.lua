@@ -32,6 +32,10 @@ local ENEMY_DEFAULT_ACTION = Config.Combat.ENEMY_DEFAULT_ACTION
 local GUARD_ACTION = AUTO_TIMEOUT_ACTION -- la Garde est l'action défensive par défaut.
 local ESCAPE_ACTION = "Fuite"
 
+-- Lot 04 — Configuration Essence/cooldowns (autoritaire côté serveur).
+local Essence = Config.Essence
+local ActionRules = Config.ActionRules
+
 local CombatSession = {}
 CombatSession.__index = CombatSession
 
@@ -57,6 +61,8 @@ function CombatSession.new(service: any, player: Player, creatureKey: string)
 	self._cleaned = false
 	-- Fonction de résolution du tour joueur en attente (nil si aucun tour en attente).
 	self._resolveTurn = nil :: ((action: string) -> ())?
+	-- Lot 04 — Horodatage serveur synchronisé de fin du tour joueur (chronomètre UI).
+	self._turnEndsAt = nil :: number?
 	-- Suivi pour le nettoyage fiable.
 	self._connections = {} :: { RBXScriptConnection }
 	self._instances = {} :: { Instance }
@@ -88,6 +94,10 @@ function CombatSession:_buildParticipants(player: Player, creatureKey: string): 
 		model = nil,
 		isGuarding = false,
 		hasActedThisRound = false,
+		-- Lot 04 — Essence démarrant à la valeur de configuration (0), aucune recharge.
+		essence = Essence.START_OF_COMBAT,
+		cooldowns = {},
+		personalTurns = 0,
 	}
 
 	local enemyParticipant: CombatParticipant = {
@@ -101,6 +111,10 @@ function CombatSession:_buildParticipants(player: Player, creatureKey: string): 
 		model = nil,
 		isGuarding = false,
 		hasActedThisRound = false,
+		-- Lot 04 — Les ennemis sont aussi des combattants (Essence générique, non affichée).
+		essence = Essence.START_OF_COMBAT,
+		cooldowns = {},
+		personalTurns = 0,
 	}
 
 	return { playerParticipant, enemyParticipant }
@@ -116,6 +130,130 @@ end
 
 function CombatSession:_trackInstance(inst: Instance)
 	table.insert(self._instances, inst)
+end
+
+-- ---------------------------------------------------------------------------
+-- Essence et cooldowns (autoritaires côté serveur) — Lot 04
+-- ---------------------------------------------------------------------------
+
+-- Ajoute (ou retire si négatif) de l'Essence à un combattant en restant borné
+-- entre 0 et le maximum de configuration. Gère le cas « déjà à 6 » sans dépassement.
+function CombatSession:_grantEssence(participant: CombatParticipant, amount: number)
+	if amount == 0 then
+		return
+	end
+	participant.essence = math.clamp(participant.essence + amount, 0, Essence.MAX)
+end
+
+-- Début d'un tour personnel : décompte des recharges puis gain de +1 Essence.
+-- Appelé pour CHAQUE combattant au début de SON tour : les tours des autres ne
+-- réduisent donc jamais ses recharges (décompte en tours personnels uniquement).
+function CombatSession:_beginPersonalTurn(participant: CombatParticipant)
+	participant.personalTurns += 1
+
+	-- Décompte des recharges en cours (un tour personnel écoulé).
+	for actionId, remaining in participant.cooldowns do
+		local left = remaining - 1
+		if left <= 0 then
+			participant.cooldowns[actionId] = nil
+		else
+			participant.cooldowns[actionId] = left
+		end
+	end
+
+	-- +1 Essence au début de chaque tour personnel (plafonné à MAX).
+	self:_grantEssence(participant, Essence.GAIN_PER_PERSONAL_TURN)
+end
+
+-- Valide qu'une action est utilisable par un combattant : Essence suffisante et
+-- recharge écoulée. Les actions sans règle (ex. « Attendre » de l'ennemi, « Fuite »)
+-- sont toujours autorisées. Renvoie (autorisé, raison?) ; la raison sert aux logs.
+function CombatSession:_canUseAction(participant: CombatParticipant, action: string): (boolean, string?)
+	local rule = ActionRules[action]
+	if not rule then
+		return true, nil
+	end
+	if (participant.cooldowns[action] or 0) > 0 then
+		return false, "cooldown"
+	end
+	if participant.essence < rule.essenceCost then
+		return false, "essence"
+	end
+	return true, nil
+end
+
+-- Applique les conséquences Essence/recharge d'une action résolue (coût débité,
+-- gain accordé, recharge armée). `cancelled` : vrai si l'action a été annulée
+-- (QTE offensif du lot 05) — dans ce cas l'attaque de base n'accorde pas d'Essence.
+function CombatSession:_applyActionResources(participant: CombatParticipant, action: string, cancelled: boolean)
+	local rule = ActionRules[action]
+	if not rule then
+		return
+	end
+
+	-- 1) Débiter le coût (déjà validé : ne descend jamais sous 0 par sécurité).
+	participant.essence = math.max(0, participant.essence - rule.essenceCost)
+
+	-- 2) Accorder le gain d'Essence propre à l'action.
+	local gain = 0
+	if rule.isBaseAttack then
+		-- Attaque de base : +1 seulement si l'action n'a pas été annulée.
+		if not cancelled then
+			gain = Essence.GAIN_BASE_ATTACK
+		end
+	elseif rule.isMeditate then
+		gain = Essence.GAIN_MEDITATE
+	end
+	self:_grantEssence(participant, gain)
+
+	-- 3) Armer la recharge (comptée en tours personnels du combattant).
+	if rule.cooldownPersonalTurns > 0 then
+		participant.cooldowns[action] = rule.cooldownPersonalTurns
+	end
+end
+
+-- Combattant joueur de la session (côté "Player").
+function CombatSession:_playerParticipant(): CombatParticipant?
+	for _, p in self.participants do
+		if p.side == "Player" then
+			return p
+		end
+	end
+	return nil
+end
+
+-- Réplique au client l'instantané autoritaire des ressources du joueur :
+-- Essence courante/max, chronomètre du tour et, par action, coût/recharge/dispo.
+-- L'UI (lot 03) ne fait qu'afficher : aucune décision côté client.
+function CombatSession:_firePlayerResources()
+	local p = self:_playerParticipant()
+	if not p then
+		return
+	end
+
+	local actions: { [string]: any } = {}
+	for actionId, rule in ActionRules do
+		local remaining = p.cooldowns[actionId] or 0
+		actions[actionId] = {
+			cost = rule.essenceCost,
+			cooldownRemaining = remaining,
+			available = remaining <= 0 and p.essence >= rule.essenceCost,
+		}
+	end
+
+	local ok, remote = pcall(function()
+		return Remotes.get("CombatResourcesChanged")
+	end)
+	if ok and remote and remote:IsA("RemoteEvent") and self.player and self.player.Parent then
+		remote:FireClient(self.player, {
+			sessionId = self.id,
+			essence = p.essence,
+			essenceMax = Essence.MAX,
+			turnEndsAt = self._turnEndsAt,
+			turnSeconds = TURN_SECONDS,
+			actions = actions,
+		})
+	end
 end
 
 -- ---------------------------------------------------------------------------
@@ -251,15 +389,25 @@ function CombatSession:_takeTurn(participant: CombatParticipant)
 	-- Verrou anti double-action posé dès l'entrée du tour.
 	participant.hasActedThisRound = true
 
+	-- Lot 04 — Début du tour personnel : décompte des recharges et gain de +1 Essence.
+	self:_beginPersonalTurn(participant)
+
 	if participant.side == "Player" then
 		self.state:transition(States.ChoosingAction)
+		-- Chronomètre du tour : fin = maintenant + durée (horloge serveur synchronisée).
+		self._turnEndsAt = workspace:GetServerTimeNow() + TURN_SECONDS
 		self:_fireState()
+		-- Réplique l'Essence gagnée, le chronomètre et la disponibilité des actions.
+		self:_firePlayerResources()
 
 		local action = self:_awaitPlayerChoice(participant)
+		self._turnEndsAt = nil
 		if not self._active then
 			return
 		end
 		self:_applyAction(participant, action)
+		-- Réplique l'Essence/recharges mises à jour après résolution.
+		self:_firePlayerResources()
 	else
 		-- Ennemi : aucune IA au lot 02. Action neutre par défaut.
 		self:_applyAction(participant, ENEMY_DEFAULT_ACTION)
@@ -310,6 +458,10 @@ function CombatSession:_applyAction(participant: CombatParticipant, action: stri
 		self:_finish("Escaped")
 		return
 	end
+
+	-- Lot 04 — Conséquences Essence/recharge de l'action résolue (coût, gain, cooldown).
+	-- `cancelled` reste faux ici : l'annulation provient du QTE offensif (lot 05).
+	self:_applyActionResources(participant, action, false)
 
 	if action == GUARD_ACTION then
 		self.state:transition(States.Defending)
@@ -448,6 +600,20 @@ function CombatSession:submitAction(player: Player, action: string): boolean
 	if not resolve then
 		return false
 	end
+
+	-- Lot 04 — Validation autoritaire du coût/recharge : une action trop chère ou
+	-- encore en recharge est refusée. Le tour reste en attente (le joueur peut
+	-- rechoisir) ; on réplique l'état des ressources pour rafraîchir l'UI.
+	local participant = self:_playerParticipant()
+	if participant then
+		local allowed, reason = self:_canUseAction(participant, action)
+		if not allowed then
+			print(("[CombatSession %s] Action « %s » refusée (%s)."):format(self.id, action, tostring(reason)))
+			self:_firePlayerResources()
+			return false
+		end
+	end
+
 	resolve(action)
 	return true
 end
