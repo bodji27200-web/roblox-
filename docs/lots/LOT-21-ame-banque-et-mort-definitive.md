@@ -26,7 +26,7 @@ supprimer de données sans confirmation atomique et journalisation.
 - `src/server/persistence/` : DataStore sécurisé, âme, banques.
 - `src/server/world/bank/` : interaction avec la Banque physique (lot 19).
 - `src/shared/` : configuration et types.
-- `docs/lots/README.md` (statut + hash, à la fin).
+- `docs/lots/README.md` (à la fin : passer le statut à TERMINÉ + renseigner la date ; colonne Hash commit laissée vide).
 
 ## Fichiers interdits ou hors périmètre
 
@@ -105,6 +105,6 @@ feat: add persistent soul bank and permadeath systems
 
 - Liste des fichiers créés ou modifiés.
 - Contradictions éventuelles détectées (sinon « aucune »).
-- Confirmation de la mise à jour du statut + hash du lot 21 dans `docs/lots/README.md`.
+- Confirmation que le statut du lot 21 est passé à TERMINÉ et la date renseignée dans `docs/lots/README.md` (colonne Hash commit laissée vide ; pas de second commit pour le hash).
 - Le hash du commit poussé sur `main`.
 - Indiquer explicitement ce qui n'a pas pu être testé sans Roblox Studio.

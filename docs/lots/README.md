@@ -12,9 +12,13 @@ un fichier autonome décrivant une tâche précise, à exécuter **une par une**
   code explicitement nécessaires). Il ne parcourt jamais tout le dépôt.
 - Les lots s'exécutent **dans l'ordre**. On ne commence jamais le lot suivant
   dans la même conversation.
-- Après réussite d'un lot, l'agent met à jour **uniquement** ce README (statut,
-  date, hash du commit) puis fait un seul commit correspondant au lot et pousse
-  sur `main`.
+- Après réussite d'un lot, l'agent met à jour **uniquement** ce README :
+  - passer le statut du lot à **TERMINÉ** et renseigner la **date** ;
+  - la colonne **Hash commit** peut rester **vide** pendant ce commit (le hash
+    n'existe pas encore au moment de l'écrire) ;
+  - faire **un seul commit** correspondant au lot et pousser sur `main` ;
+  - communiquer le **hash réel** du commit poussé **dans la réponse finale** ;
+  - ne **pas** créer un deuxième commit uniquement pour enregistrer le hash.
 
 ## Avertissements
 
@@ -29,7 +33,8 @@ un fichier autonome décrivant une tâche précise, à exécuter **une par une**
 
 - **TODO** (PRÊT À EXÉCUTER) : prêt, dépendances satisfaites, peut être lancé.
 - **EN COURS** : un lot est en cours de réalisation dans une conversation.
-- **TERMINÉ** : lot réussi, commité et poussé ; hash renseigné.
+- **TERMINÉ** : lot réussi, commité et poussé ; statut et date renseignés (la
+  colonne Hash commit peut rester vide, le hash étant donné dans la réponse finale).
 - **BLOQUÉ** : ne peut pas démarrer tant qu'une condition n'est pas remplie
   (lot précédent non terminé, prototype solo non validé, etc.).
 
@@ -39,8 +44,10 @@ un fichier autonome décrivant une tâche précise, à exécuter **une par une**
 Lis uniquement docs/lots/LOT-XX-....md et exécute exactement ce lot.
 Ne lis pas les autres lots. N'analyse pas tout le dépôt.
 Ne commence aucun autre lot. Signale toute contradiction.
-À la fin : un seul commit, pousse sur main, mets à jour le statut et le hash
-dans docs/lots/README.md, et donne-moi le hash du commit.
+À la fin : mets à jour le statut (TERMINÉ) et la date dans docs/lots/README.md
+(laisse la colonne Hash commit vide), fais un seul commit, pousse sur main,
+et donne-moi le hash du commit dans ta réponse. Ne crée pas un second commit
+juste pour le hash.
 ```
 
 ## Tableau de progression
@@ -72,7 +79,9 @@ dans docs/lots/README.md, et donne-moi le hash du commit.
 
 ## Conditions de déblocage
 
-- **Lots 02 à 11** : exécutables dès que le lot précédent est TERMINÉ.
+- Un lot devient exécutable uniquement lorsque **toutes les dépendances indiquées
+  dans le tableau** sont TERMINÉES. L'ordre numérique ne remplace pas les
+  dépendances explicites.
 - **Lots 12 à 18** : restent BLOQUÉS tant que le **prototype solo** (lot 11) n'est
   pas validé.
 - **Lots 19 à 22** : restent BLOQUÉS tant que le **combat** et la **conception de

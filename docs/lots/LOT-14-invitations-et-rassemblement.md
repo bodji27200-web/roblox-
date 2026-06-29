@@ -25,7 +25,7 @@ téléportation sécurisée des membres acceptant.
 - `src/server/combat/gathering/` : invitations, éligibilité, téléportation.
 - `src/client/ui/` : invitation à rejoindre (accepter/refuser).
 - `src/shared/` : configuration (délai, distance d'éligibilité).
-- `docs/lots/README.md` (statut + hash, à la fin).
+- `docs/lots/README.md` (à la fin : passer le statut à TERMINÉ + renseigner la date ; colonne Hash commit laissée vide).
 
 ## Fichiers interdits ou hors périmètre
 
@@ -95,6 +95,6 @@ feat: add combat gathering invitations
 
 - Liste des fichiers créés ou modifiés.
 - Contradictions éventuelles détectées (sinon « aucune »).
-- Confirmation de la mise à jour du statut + hash du lot 14 dans `docs/lots/README.md`.
+- Confirmation que le statut du lot 14 est passé à TERMINÉ et la date renseignée dans `docs/lots/README.md` (colonne Hash commit laissée vide ; pas de second commit pour le hash).
 - Le hash du commit poussé sur `main`.
 - Indiquer explicitement ce qui n'a pas pu être testé sans Roblox Studio.

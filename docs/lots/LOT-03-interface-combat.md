@@ -26,7 +26,7 @@ entièrement en français.
 
 - `src/client/ui/` : composants HUD, menu, ordre des tours, zone centrale.
 - `src/shared/` : extensions de configuration UI si nécessaire.
-- `docs/lots/README.md` (statut + hash, à la fin).
+- `docs/lots/README.md` (à la fin : passer le statut à TERMINÉ + renseigner la date ; colonne Hash commit laissée vide).
 
 ## Fichiers interdits ou hors périmètre
 
@@ -97,6 +97,6 @@ feat: add functional combat interface
 
 - Liste des fichiers créés ou modifiés.
 - Contradictions éventuelles détectées (sinon « aucune »).
-- Confirmation de la mise à jour du statut + hash du lot 03 dans `docs/lots/README.md`.
+- Confirmation que le statut du lot 03 est passé à TERMINÉ et la date renseignée dans `docs/lots/README.md` (colonne Hash commit laissée vide ; pas de second commit pour le hash).
 - Le hash du commit poussé sur `main`.
 - Indiquer explicitement ce qui n'a pas pu être testé sans Roblox Studio.

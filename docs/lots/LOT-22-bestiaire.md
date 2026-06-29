@@ -24,7 +24,7 @@ informations **progressivement**, sans jamais tout révéler dès le premier reg
 - `src/server/bestiary/` : enregistrement et progression des connaissances.
 - `src/client/ui/bestiary/` : interface temporaire.
 - `src/shared/bestiary/` : données configurables des créatures.
-- `docs/lots/README.md` (statut + hash, à la fin).
+- `docs/lots/README.md` (à la fin : passer le statut à TERMINÉ + renseigner la date ; colonne Hash commit laissée vide).
 
 ## Fichiers interdits ou hors périmètre
 
@@ -89,6 +89,6 @@ feat: add progressive creature bestiary
 
 - Liste des fichiers créés ou modifiés.
 - Contradictions éventuelles détectées (sinon « aucune »).
-- Confirmation de la mise à jour du statut + hash du lot 22 dans `docs/lots/README.md`.
+- Confirmation que le statut du lot 22 est passé à TERMINÉ et la date renseignée dans `docs/lots/README.md` (colonne Hash commit laissée vide ; pas de second commit pour le hash).
 - Le hash du commit poussé sur `main`.
 - Indiquer explicitement ce qui n'a pas pu être testé sans Roblox Studio.

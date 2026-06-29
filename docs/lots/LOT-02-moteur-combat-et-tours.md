@@ -26,7 +26,7 @@ avec Garde automatique, et nettoyage fiable. Aucune UI avancée ni kit complet.
 
 - `src/server/combat/` : session, machine à états, gestion des tours.
 - `src/shared/` : extensions des types et de la configuration du combat.
-- `docs/lots/README.md` (statut + hash, à la fin).
+- `docs/lots/README.md` (à la fin : passer le statut à TERMINÉ + renseigner la date ; colonne Hash commit laissée vide).
 
 ## Fichiers interdits ou hors périmètre
 
@@ -102,6 +102,6 @@ feat: add server-authoritative combat turn engine
 
 - Liste des fichiers créés ou modifiés.
 - Contradictions éventuelles détectées (sinon « aucune »).
-- Confirmation de la mise à jour du statut + hash du lot 02 dans `docs/lots/README.md`.
+- Confirmation que le statut du lot 02 est passé à TERMINÉ et la date renseignée dans `docs/lots/README.md` (colonne Hash commit laissée vide ; pas de second commit pour le hash).
 - Le hash du commit poussé sur `main`.
 - Indiquer explicitement ce qui n'a pas pu être testé sans Roblox Studio.

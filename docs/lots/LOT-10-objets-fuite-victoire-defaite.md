@@ -25,7 +25,7 @@ d'âme et un bouton développeur de restauration. Aucun DataStore.
 - `src/server/combat/` : objets, fuite, issues, simulation d'âme.
 - `src/client/ui/` : écran d'issue, bouton développeur (branchement).
 - `src/shared/` : configuration (potions, formule de fuite), types.
-- `docs/lots/README.md` (statut + hash, à la fin).
+- `docs/lots/README.md` (à la fin : passer le statut à TERMINÉ + renseigner la date ; colonne Hash commit laissée vide).
 
 ## Fichiers interdits ou hors périmètre
 
@@ -101,6 +101,6 @@ feat: add combat outcomes items flee and soul simulation
 
 - Liste des fichiers créés ou modifiés.
 - Contradictions éventuelles détectées (sinon « aucune »).
-- Confirmation de la mise à jour du statut + hash du lot 10 dans `docs/lots/README.md`.
+- Confirmation que le statut du lot 10 est passé à TERMINÉ et la date renseignée dans `docs/lots/README.md` (colonne Hash commit laissée vide ; pas de second commit pour le hash).
 - Le hash du commit poussé sur `main`.
 - Indiquer explicitement ce qui n'a pas pu être testé sans Roblox Studio.

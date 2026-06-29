@@ -33,7 +33,7 @@ configuration centralisée, types, zone de test, déclencheurs visibles).
 - `src/client/` : point d'entrée client minimal.
 - `src/shared/remotes/` ou équivalent : déclaration des RemoteEvents/Functions (vides).
 - `docs/prototype-combat-setup.md` (documentation de lancement).
-- `docs/lots/README.md` (mise à jour du statut + hash uniquement, à la fin).
+- `docs/lots/README.md` (à la fin : passer le statut à TERMINÉ + renseigner la date ; colonne Hash commit laissée vide).
 
 ## Fichiers interdits ou hors périmètre
 
@@ -108,8 +108,7 @@ chore: create combat prototype foundation
 
 - Liste des fichiers créés ou modifiés.
 - Contradictions éventuelles détectées (sinon « aucune »).
-- Confirmation que le statut du lot 01 a été passé à TERMINÉ dans
-  `docs/lots/README.md` et que le hash y est renseigné.
+- Confirmation que le statut du lot 01 est passé à TERMINÉ et la date renseignée dans `docs/lots/README.md` (colonne Hash commit laissée vide ; pas de second commit pour le hash).
 - Le hash du commit poussé sur `main`.
 - Ne pas prétendre avoir testé dans Roblox Studio sans y avoir réellement accès :
   indiquer explicitement ce qui n'a pas pu être vérifié.

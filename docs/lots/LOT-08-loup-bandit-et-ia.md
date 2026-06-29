@@ -24,7 +24,7 @@ n'est annoncée avant le tour de l'ennemi.
 
 - `src/shared/enemies/` : configurations Loup et Bandit.
 - `src/server/combat/ai/` : logique de choix d'action.
-- `docs/lots/README.md` (statut + hash, à la fin).
+- `docs/lots/README.md` (à la fin : passer le statut à TERMINÉ + renseigner la date ; colonne Hash commit laissée vide).
 
 ## Fichiers interdits ou hors périmètre
 
@@ -100,6 +100,6 @@ feat: add prototype enemies and combat ai
 
 - Liste des fichiers créés ou modifiés.
 - Contradictions éventuelles détectées (sinon « aucune »).
-- Confirmation de la mise à jour du statut + hash du lot 08 dans `docs/lots/README.md`.
+- Confirmation que le statut du lot 08 est passé à TERMINÉ et la date renseignée dans `docs/lots/README.md` (colonne Hash commit laissée vide ; pas de second commit pour le hash).
 - Le hash du commit poussé sur `main`.
 - Indiquer explicitement ce qui n'a pas pu être testé sans Roblox Studio.

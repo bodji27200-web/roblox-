@@ -22,7 +22,7 @@ neutralisé, ainsi que le K.-O. d'invocation et son relèvement, sans mort perma
 
 - `src/server/combat/summons/` : instinct, K.-O., relèvement.
 - `src/shared/` : configuration et types.
-- `docs/lots/README.md` (statut + hash, à la fin).
+- `docs/lots/README.md` (à la fin : passer le statut à TERMINÉ + renseigner la date ; colonne Hash commit laissée vide).
 
 ## Fichiers interdits ou hors périmètre
 
@@ -92,6 +92,6 @@ feat: add summon ko revive and instinct behavior
 
 - Liste des fichiers créés ou modifiés.
 - Contradictions éventuelles détectées (sinon « aucune »).
-- Confirmation de la mise à jour du statut + hash du lot 18 dans `docs/lots/README.md`.
+- Confirmation que le statut du lot 18 est passé à TERMINÉ et la date renseignée dans `docs/lots/README.md` (colonne Hash commit laissée vide ; pas de second commit pour le hash).
 - Le hash du commit poussé sur `main`.
 - Indiquer explicitement ce qui n'a pas pu être testé sans Roblox Studio.

@@ -24,7 +24,7 @@ central avec les bâtiments principaux et les quatre sorties cardinales marquée
 - `src/server/world/` ou équivalent : mise en place de la région et du village.
 - Assets de niveau dans l'emplacement prévu par la structure du projet.
 - `src/shared/` : configuration des emplacements/sorties.
-- `docs/lots/README.md` (statut + hash, à la fin).
+- `docs/lots/README.md` (à la fin : passer le statut à TERMINÉ + renseigner la date ; colonne Hash commit laissée vide).
 
 ## Fichiers interdits ou hors périmètre
 
@@ -86,6 +86,6 @@ feat: create first forest region and village hub
 
 - Liste des fichiers créés ou modifiés.
 - Contradictions éventuelles détectées (sinon « aucune »).
-- Confirmation de la mise à jour du statut + hash du lot 19 dans `docs/lots/README.md`.
+- Confirmation que le statut du lot 19 est passé à TERMINÉ et la date renseignée dans `docs/lots/README.md` (colonne Hash commit laissée vide ; pas de second commit pour le hash).
 - Le hash du commit poussé sur `main`.
 - Indiquer explicitement ce qui n'a pas pu être testé sans Roblox Studio.

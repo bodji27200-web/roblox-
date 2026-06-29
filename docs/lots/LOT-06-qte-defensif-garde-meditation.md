@@ -25,7 +25,7 @@ l'action Méditer avec son malus, ainsi que les règles d'arrondi des dégâts.
 - `src/client/qte/` : QTE défensif.
 - `src/server/combat/` : application des dégâts, Garde, Méditer, malus.
 - `src/shared/` : configuration des pourcentages et profils défensifs, types.
-- `docs/lots/README.md` (statut + hash, à la fin).
+- `docs/lots/README.md` (à la fin : passer le statut à TERMINÉ + renseigner la date ; colonne Hash commit laissée vide).
 
 ## Fichiers interdits ou hors périmètre
 
@@ -100,6 +100,6 @@ feat: add defensive qte guard and meditation
 
 - Liste des fichiers créés ou modifiés.
 - Contradictions éventuelles détectées (sinon « aucune »).
-- Confirmation de la mise à jour du statut + hash du lot 06 dans `docs/lots/README.md`.
+- Confirmation que le statut du lot 06 est passé à TERMINÉ et la date renseignée dans `docs/lots/README.md` (colonne Hash commit laissée vide ; pas de second commit pour le hash).
 - Le hash du commit poussé sur `main`.
 - Indiquer explicitement ce qui n'a pas pu être testé sans Roblox Studio.
