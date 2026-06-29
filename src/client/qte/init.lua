@@ -34,7 +34,30 @@ function OffensiveQte.new(parent: Instance)
 	self._bar = OffensiveBar.new(parent)
 	self._speed = DevConfig.DEFAULT_SPEED_MULTIPLIER
 	self._running = false
+	-- Drapeau d'annulation propre (cancel) et connexion d'entrée du curseur en cours :
+	-- permettent d'arrêter la boucle, de couper la saisie et d'empêcher l'envoi.
+	self._cancelled = false
+	self._activeConn = nil :: RBXScriptConnection?
 	return self
+end
+
+-- Annulation propre du QTE en cours (le serveur a quitté ChoosingAction, le tour a
+-- expiré, la session a changé ou le combat s'est terminé). Arrête la boucle active,
+-- déconnecte la saisie du curseur, masque la barre et empêche l'envoi de la charge utile
+-- (la coroutine de `run` ne rappellera pas `onComplete`). Sans effet si rien n'est en cours.
+function OffensiveQte:cancel()
+	if not self._running then
+		return
+	end
+	self._cancelled = true
+	self._running = false
+	-- Couper l'entrée en cours pour ne plus capturer le moindre clic d'arrêt.
+	if self._activeConn then
+		self._activeConn:Disconnect()
+		self._activeConn = nil
+	end
+	-- Masquer la barre immédiatement.
+	self._bar:unmount()
 end
 
 -- Outil développeur : règle le multiplicateur de vitesse (borné par la configuration).
@@ -69,9 +92,15 @@ function OffensiveQte:run(action: string, onComplete: (any) -> ())
 	end
 
 	self._running = true
+	self._cancelled = false
 	task.spawn(function()
 		local cursors, duration = self:_play(profile)
 		self._running = false
+		-- QTE annulé pendant le jeu : ne JAMAIS envoyer de charge utile (le tour est géré
+		-- côté serveur — timeout/Garde, fin de combat, etc.).
+		if self._cancelled then
+			return
+		end
 		onComplete({ cursors = cursors, duration = duration })
 	end)
 end
@@ -89,6 +118,10 @@ function OffensiveQte:_play(profile: OffensiveQteProfile): ({ any }, number)
 	local cancelledEarly = false
 
 	for i = 1, profile.cursorCount do
+		-- Annulation externe (cancel) : on interrompt aussitôt la boucle de curseurs.
+		if self._cancelled then
+			break
+		end
 		if cancelledEarly then
 			-- Curseurs non joués après une annulation immédiate : comptés comme hors zone.
 			cursors[i] = { stopped = false }
@@ -114,6 +147,12 @@ function OffensiveQte:_play(profile: OffensiveQteProfile): ({ any }, number)
 				task.wait(profile.spacingSeconds / self._speed)
 			end
 		end
+	end
+
+	-- QTE annulé en cours de jeu : ne calcule pas de verdict, n'attend pas et ne ferme pas
+	-- (la barre est déjà masquée par cancel()). La valeur renvoyée est ignorée par run().
+	if self._cancelled then
+		return cursors, 0
 	end
 
 	-- Verdict local (affichage immédiat ; identique au calcul serveur).
@@ -162,8 +201,14 @@ function OffensiveQte:_runCursor(profile: OffensiveQteProfile): number?
 			finished = true
 		end
 	end)
+	-- Connexion suivie pour que cancel() puisse couper la saisie en cours.
+	self._activeConn = conn
 
 	while not finished do
+		-- Annulation externe (cancel) : cesse d'animer le curseur immédiatement.
+		if self._cancelled then
+			break
+		end
 		local t = (os.clock() - startClock) / duration
 		if t >= 1 then
 			bar:setCursor(1)
@@ -174,6 +219,14 @@ function OffensiveQte:_runCursor(profile: OffensiveQteProfile): number?
 	end
 
 	conn:Disconnect()
+	if self._activeConn == conn then
+		self._activeConn = nil
+	end
+
+	-- Annulé : aucune position d'arrêt valide à remonter.
+	if self._cancelled then
+		return nil
+	end
 
 	if stoppedAt then
 		bar:setCursor(stoppedAt)

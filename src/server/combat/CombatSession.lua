@@ -13,6 +13,8 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+-- Lot 05 (finition) — Génération d'identifiants de défi QTE imprévisibles (GUID).
+local HttpService = game:GetService("HttpService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared:WaitForChild("Config"))
@@ -73,7 +75,6 @@ function CombatSession.new(service: any, player: Player, creatureKey: string)
 	-- Lot 05 (sécurité) — Défi QTE en cours (unique, lié à la session et au tour). Posé
 	-- par requestOffensiveQte, consommé (usage unique) par submitOffensiveQte. nil sinon.
 	self._qteChallenge = nil :: any
-	self._qteChallengeSeq = 0
 	-- Lot 04 — Horodatage serveur synchronisé de fin du tour joueur (chronomètre UI).
 	self._turnEndsAt = nil :: number?
 	-- Suivi pour le nettoyage fiable.
@@ -436,9 +437,9 @@ function CombatSession:_takeTurn(participant: CombatParticipant)
 	local usedAction: string?
 	if participant.side == "Player" then
 		self.state:transition(States.ChoosingAction)
-		-- Lot 05 (sécurité) — Tout défi QTE d'un tour précédent est invalidé à l'entrée
-		-- du nouveau tour (un défi reste lié au tour où il a été émis).
-		self._qteChallenge = nil
+		-- Lot 05 (sécurité) — Tout défi/verdict QTE d'un tour précédent est invalidé à
+		-- l'entrée du nouveau tour (un défi reste lié au tour où il a été émis).
+		self:_invalidateQte()
 		-- Chronomètre du tour : fin = maintenant + durée (horloge serveur synchronisée).
 		self._turnEndsAt = workspace:GetServerTimeNow() + TURN_SECONDS
 		self:_fireState()
@@ -463,6 +464,10 @@ function CombatSession:_takeTurn(participant: CombatParticipant)
 	-- Fin du tour personnel : décompte des recharges après la résolution, en
 	-- ignorant l'action armée ce tour-ci (affichage et timing cohérents).
 	self:_endPersonalTurn(participant, usedAction)
+
+	-- Tour résolu : tout défi/verdict QTE résiduel est invalidé (le verdict en attente a
+	-- déjà été consommé par _applyAction ; un défi laissé par un timeout est nettoyé ici).
+	self:_invalidateQte()
 end
 
 -- Attend le choix du joueur pendant TURN_SECONDS. À expiration : Garde automatique.
@@ -492,6 +497,10 @@ function CombatSession:_awaitPlayerChoice(participant: CombatParticipant): strin
 	task.delay(TURN_SECONDS, function()
 		if not resolved and self._active then
 			print(("[CombatSession %s] Timer expiré pour %s : Garde automatique."):format(self.id, participant.displayName))
+			-- Tour expiré : invalider tout défi/verdict QTE en attente avant de résoudre
+			-- (le `not resolved` ci-dessus garantit qu'aucune soumission valide en cours
+			-- n'est écrasée — la première résolution gagne).
+			self:_invalidateQte()
 			resolve(AUTO_TIMEOUT_ACTION)
 		end
 	end)
@@ -634,6 +643,8 @@ function CombatSession:_finish(result: string)
 		self:_fireState()
 	end
 	self._active = false
+	-- Fin du combat : aucun défi/verdict QTE ne doit survivre à la rencontre.
+	self:_invalidateQte()
 	self:_cleanup()
 end
 
@@ -645,6 +656,9 @@ function CombatSession:abort(reason: string)
 	end
 	print(("[CombatSession %s] Interruption (%s)."):format(self.id, reason))
 	self._active = false
+	-- Interruption : invalider tout défi/verdict QTE en attente (aucune soumission tardive
+	-- ne pourra plus être acceptée après l'abandon).
+	self:_invalidateQte()
 	-- Débloque la coroutine si elle attendait un choix.
 	if self._resolveTurn then
 		local resolve = self._resolveTurn
@@ -663,6 +677,8 @@ function CombatSession:_cleanup()
 	self._cleaned = true
 	self._active = false
 	self._resolveTurn = nil
+	-- Tout défi/verdict QTE résiduel est explicitement invalidé au nettoyage.
+	self:_invalidateQte()
 
 	-- Atteindre Cleanup depuis l'état courant (toujours autorisé pour les états actifs
 	-- et terminaux).
@@ -766,6 +782,38 @@ function CombatSession:_qteWindowSeconds(profile: any): number
 	return theoretical + QteConfig.Challenge.EXTRA_SECONDS
 end
 
+-- Durée minimale physiquement plausible d'un QTE menant à un résultat Normal/Perfect, au
+-- réglage de vitesse dev le PLUS RAPIDE (borne inférieure d'un temps de jeu honnête). Pour
+-- un Normal/Perfect tous les curseurs sont joués : on additionne, pour chaque curseur, le
+-- temps de parcours de la barre jusqu'à sa position d'arrêt (proportionnel à `cursorSeconds`)
+-- et un espacement (`spacingSeconds`) par intervalle entre curseurs consécutifs. En deçà de
+-- cette durée (moins une petite tolérance), la soumission est forcément forgée. Une annulation
+-- immédiate peut rester plus rapide (le QTE s'arrête au premier curseur hors zone) : l'appelant
+-- ne soumet ce plancher qu'aux résultats non annulés.
+function CombatSession:_minPlausibleSeconds(profile: any, positions: { number? }): number
+	local maxSpeed = QteConfig.Dev.MAX_SPEED_MULTIPLIER
+	local total = 0
+	for i = 1, profile.cursorCount do
+		local pos = positions[i]
+		if type(pos) == "number" then
+			-- Déplacement nécessaire du curseur i jusqu'à sa position d'arrêt.
+			total += (pos * profile.cursorSeconds) / maxSpeed
+		end
+	end
+	-- Espacements entre curseurs consécutifs (cursorCount - 1 intervalles).
+	total += math.max(0, profile.cursorCount - 1) * (profile.spacingSeconds / maxSpeed)
+	return total
+end
+
+-- Invalide explicitement tout défi QTE en attente et tout verdict offensif non encore
+-- appliqué. Appelé dès qu'un tour est résolu (ou expiré), à l'annulation (abort), au
+-- nettoyage (_cleanup) et à la fin du combat : aucun défi/verdict ne survit à son tour,
+-- ce qui ferme toute fenêtre de rejeu inter-tours.
+function CombatSession:_invalidateQte()
+	self._qteChallenge = nil
+	self._pendingOffensive = nil
+end
+
 -- Lot 05 (sécurité) — Demande de démarrage d'un QTE offensif (RemoteFunction). Le serveur
 -- valide le tour courant et l'action, puis émet un DÉFI unique lié à la session et au tour
 -- (challengeId, action, manche, tour personnel, startedAt, expiresAt). Retourne une réponse
@@ -800,11 +848,13 @@ function CombatSession:requestOffensiveQte(player: Player, action: any): { [stri
 		return { accepted = false, reason = reason or "unusable" }
 	end
 
-	-- Émission d'un défi unique (usage unique, lié au tour courant).
-	self._qteChallengeSeq += 1
+	-- Émission d'un défi unique (usage unique, lié au tour courant). L'identifiant est un
+	-- GUID imprévisible généré côté serveur : le client ne peut ni le deviner ni le
+	-- reconstruire (contrairement à l'ancien « combat-X-qte-Y » séquentiel), ce qui
+	-- empêche de forger une soumission sans avoir d'abord reçu le défi.
 	local now = workspace:GetServerTimeNow()
 	local challenge = {
-		id = ("%s-qte-%d"):format(self.id, self._qteChallengeSeq),
+		id = HttpService:GenerateGUID(false),
 		action = action,
 		round = self.round,
 		personalTurn = participant.personalTurns,
@@ -969,17 +1019,38 @@ function CombatSession:submitOffensiveQte(player: Player, payload: any): boolean
 		end
 	end
 
-	-- 7) Durée physique annoncée par le client (si fournie) : finie, positive et
-	-- cohérente avec le temps réellement observé côté serveur.
+	-- 7) Durée physique annoncée par le client : OBLIGATOIRE. Doit être un nombre fini,
+	-- strictement positif, et inférieur ou égal au temps réellement observé côté serveur
+	-- (avec une tolérance réseau configurable pour la latence d'aller-retour). Une durée
+	-- absente, NaN, infinie, nulle/négative ou supérieure au temps serveur est rejetée.
 	local clientDuration = payload.duration
-	if clientDuration ~= nil then
-		if type(clientDuration) ~= "number"
-			or clientDuration ~= clientDuration
-			or clientDuration < 0
-			or clientDuration > serverElapsed + QteConfig.Challenge.EXTRA_SECONDS
-		then
+	if type(clientDuration) ~= "number"
+		or clientDuration ~= clientDuration -- NaN
+		or clientDuration == math.huge
+		or clientDuration == -math.huge
+		or clientDuration <= 0
+		or clientDuration > serverElapsed + QteConfig.Challenge.NETWORK_TOLERANCE_SECONDS
+	then
+		self._qteChallenge = nil
+		self:_rejectOffensive(action, "bad-duration")
+		return false
+	end
+
+	-- Verdict recalculé côté serveur à partir des positions (source autoritaire).
+	local result = Qte.computeOutcome(profile, positions)
+
+	-- 8) Pour un résultat Normal/Perfect, la soumission doit avoir pris au moins la durée
+	-- minimale physiquement plausible (déplacement de chaque curseur + espacements, au
+	-- réglage dev le plus rapide), moins une petite tolérance. On contrôle À LA FOIS le
+	-- temps observé côté serveur et la durée annoncée par le client : si l'un OU l'autre
+	-- passe sous ce plancher, la soumission est forgée et rejetée. Une annulation immédiate
+	-- est exemptée (elle peut être légitimement plus courte selon le premier curseur joué).
+	if not result.cancelled then
+		local minSeconds = self:_minPlausibleSeconds(profile, positions)
+		local floor = minSeconds - QteConfig.Challenge.MIN_DURATION_TOLERANCE_SECONDS
+		if serverElapsed < floor or clientDuration < floor then
 			self._qteChallenge = nil
-			self:_rejectOffensive(action, "bad-duration")
+			self:_rejectOffensive(action, "too-fast-physical")
 			return false
 		end
 	end
@@ -987,8 +1058,6 @@ function CombatSession:submitOffensiveQte(player: Player, payload: any): boolean
 	-- Défi consommé : usage unique (toute nouvelle soumission du même id sera rejetée).
 	self._qteChallenge = nil
 
-	-- Verdict recalculé côté serveur à partir des positions (source autoritaire).
-	local result = Qte.computeOutcome(profile, positions)
 	self._pendingOffensive = {
 		action = action,
 		outcome = result.outcome,

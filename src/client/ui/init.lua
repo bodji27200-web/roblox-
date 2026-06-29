@@ -86,6 +86,9 @@ function CombatUI.new()
 	self.qte = OffensiveQte.new(gui)
 	self._qteActive = false
 	self._actionPending = false
+	-- Identifiant de session courant : un changement signale une nouvelle rencontre et
+	-- doit annuler tout QTE encore en cours (charge utile devenue obsolète).
+	self._sessionId = nil :: any
 
 	-- Abonnements : chaque composant se redessine quand l'état change.
 	self.state:subscribe(function(data)
@@ -128,6 +131,22 @@ function CombatUI:_onServerState(payload: { [string]: any })
 	self.state:applyServerState(payload)
 
 	local newState = self.state:get().combatState
+
+	-- Lot 05 (finition) — Annulation propre du QTE en cours dès qu'il ne peut plus aboutir :
+	-- le serveur quitte ChoosingAction (choix résolu OU tour expiré côté serveur), la
+	-- session change (nouvelle rencontre), ou le combat se termine. On arrête la boucle,
+	-- on coupe la saisie, on masque la barre et on n'envoie pas la charge utile périmée.
+	local newSessionId = payload.sessionId
+	local leftChoosing = previous == "ChoosingAction" and newState ~= "ChoosingAction"
+	local sessionChanged = self._sessionId ~= nil and newSessionId ~= nil and newSessionId ~= self._sessionId
+	local combatEnded = newState == "Victory" or newState == "Defeat" or newState == "Escaped"
+	if self._qteActive and (leftChoosing or sessionChanged or combatEnded) then
+		self.qte:cancel()
+		self._qteActive = false
+		self._actionPending = false
+	end
+	self._sessionId = newSessionId
+
 	if newState ~= previous then
 		local message = STATE_MESSAGES[newState]
 		if message then

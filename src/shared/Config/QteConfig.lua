@@ -39,6 +39,14 @@ local QteConfig = {
 		-- Durée physique minimale plausible d'un QTE complet (anti-soumission instantanée
 		-- d'un client forgé). Volontairement basse : un joueur rapide reste accepté.
 		MIN_PHYSICAL_SECONDS = 0.05,
+		-- Tolérance réseau (secondes) ajoutée à la borne HAUTE de validation de
+		-- `payload.duration` : la durée annoncée par le client doit rester ≤ au temps
+		-- réellement observé côté serveur, plus cette marge pour la latence d'aller-retour.
+		NETWORK_TOLERANCE_SECONDS = 1,
+		-- Petite tolérance (secondes) retranchée à la durée minimale physiquement
+		-- plausible d'un résultat Normal/Perfect : absorbe le bruit d'horloge/mesure sans
+		-- laisser passer une soumission manifestement trop rapide pour être honnête.
+		MIN_DURATION_TOLERANCE_SECONDS = 0.1,
 	},
 
 	-- Profils de QTE offensif (réutilisables). La zone jaune est toujours plus petite
