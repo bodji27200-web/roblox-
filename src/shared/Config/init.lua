@@ -9,6 +9,7 @@ local Config = {
 	Essence = require(script.EssenceConfig),
 	Epeiste = require(script.EpeisteConfig),
 	Creatures = require(script.CreaturesConfig),
+	UI = require(script.UIConfig),
 }
 
 return Config
