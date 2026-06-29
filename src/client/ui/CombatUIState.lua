@@ -57,6 +57,10 @@ export type DisplayState = {
 	turnEndsAt: number?,
 	turnSeconds: number,
 
+	-- Lot 06 — États défensifs courants répliqués par le serveur (bannières d'affichage).
+	guardActive: boolean,
+	meditateMalus: boolean,
+
 	turnOrder: { TurnEntry },
 	messages: { string },
 }
@@ -95,6 +99,9 @@ local function defaultData(): DisplayState
 		actions = {},
 		turnEndsAt = nil,
 		turnSeconds = TURN_SECONDS,
+
+		guardActive = false,
+		meditateMalus = false,
 
 		turnOrder = {},
 		messages = {},
@@ -148,6 +155,12 @@ function CombatUIState.applyServerState(self: State, payload: { [string]: any })
 		data.turnOrder = {}
 	end
 
+	-- Lot 06 — Hors combat (repos ou issue terminale) : aucune bannière défensive résiduelle.
+	if not data.inCombat then
+		data.guardActive = false
+		data.meditateMalus = false
+	end
+
 	self:_notify()
 end
 
@@ -192,6 +205,14 @@ function CombatUIState.applyResources(self: State, payload: { [string]: any })
 	end
 	if type(payload.actions) == "table" then
 		data.actions = payload.actions
+	end
+
+	-- Lot 06 — États défensifs courants (bannières Garde / malus de Méditer).
+	if type(payload.guardActive) == "boolean" then
+		data.guardActive = payload.guardActive
+	end
+	if type(payload.meditateMalus) == "boolean" then
+		data.meditateMalus = payload.meditateMalus
 	end
 
 	-- Bornage défensif identique à applyDisplay (cohérence d'affichage).

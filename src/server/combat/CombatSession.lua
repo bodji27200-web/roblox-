@@ -35,6 +35,8 @@ local AUTO_TIMEOUT_ACTION = Config.Combat.AUTO_TIMEOUT_ACTION
 local ENEMY_DEFAULT_ACTION = Config.Combat.ENEMY_DEFAULT_ACTION
 local GUARD_ACTION = AUTO_TIMEOUT_ACTION -- la Garde est l'action défensive par défaut.
 local ESCAPE_ACTION = "Fuite"
+-- Lot 06 — Méditer pose un malus défensif (sans re-créditer l'Essence du lot 04).
+local MEDITATE_ACTION = "Méditer"
 
 -- Lot 04 — Configuration Essence/cooldowns (autoritaire côté serveur).
 local Essence = Config.Essence
@@ -75,6 +77,12 @@ function CombatSession.new(service: any, player: Player, creatureKey: string)
 	-- Lot 05 (sécurité) — Défi QTE en cours (unique, lié à la session et au tour). Posé
 	-- par requestOffensiveQte, consommé (usage unique) par submitOffensiveQte. nil sinon.
 	self._qteChallenge = nil :: any
+	-- Lot 06 (sécurité) — Défi de QTE défensif en cours (unique, lié à la session et à la
+	-- manche). Émis par _runDefensiveQte, consommé (usage unique) par submitDefensiveQte.
+	self._defChallenge = nil :: any
+	-- Lot 06 — Fonction de résolution du QTE défensif en attente (nil si aucun). Réveillée
+	-- par submitDefensiveQte, par le timeout, ou par invalidation (annulation propre).
+	self._resolveDefense = nil :: ((zone: string?, aborted: boolean?) -> ())?
 	-- Lot 04 — Horodatage serveur synchronisé de fin du tour joueur (chronomètre UI).
 	self._turnEndsAt = nil :: number?
 	-- Suivi pour le nettoyage fiable.
@@ -107,6 +115,8 @@ function CombatSession:_buildParticipants(player: Player, creatureKey: string): 
 		player = player,
 		model = nil,
 		isGuarding = false,
+		-- Lot 06 — Malus de Méditer inactif au départ (posé puis expiré au tour personnel).
+		meditateMalus = false,
 		hasActedThisRound = false,
 		-- Lot 04 — Essence démarrant à la valeur de configuration (0), aucune recharge.
 		essence = Essence.START_OF_COMBAT,
@@ -124,6 +134,8 @@ function CombatSession:_buildParticipants(player: Player, creatureKey: string): 
 		player = nil,
 		model = nil,
 		isGuarding = false,
+		-- Lot 06 — Malus de Méditer (générique à tous les combattants ; non affiché ici).
+		meditateMalus = false,
 		hasActedThisRound = false,
 		-- Lot 04 — Les ennemis sont aussi des combattants (Essence générique, non affichée).
 		essence = Essence.START_OF_COMBAT,
@@ -249,6 +261,15 @@ function CombatSession:_applyActionResources(participant: CombatParticipant, act
 	end
 end
 
+-- Lot 06 — Expire les états défensifs « jusqu'au prochain tour personnel » (Garde et
+-- malus de Méditer) au DÉBUT du tour personnel suivant du combattant. Appelé une seule
+-- fois par tour personnel, avant le choix d'action : l'état précédent disparaît au bon
+-- moment (ni trop tôt à la frontière de manche, ni en plein milieu d'une attaque entrante).
+function CombatSession:_expireDefensiveStates(participant: CombatParticipant)
+	participant.isGuarding = false
+	participant.meditateMalus = false
+end
+
 -- Combattant joueur de la session (côté "Player").
 function CombatSession:_playerParticipant(): CombatParticipant?
 	for _, p in self.participants do
@@ -289,6 +310,9 @@ function CombatSession:_firePlayerResources()
 			turnEndsAt = self._turnEndsAt,
 			turnSeconds = TURN_SECONDS,
 			actions = actions,
+			-- Lot 06 — États défensifs courants (affichage des bannières Garde / malus).
+			guardActive = p.isGuarding,
+			meditateMalus = p.meditateMalus,
 		})
 	end
 end
@@ -386,10 +410,14 @@ function CombatSession:_runRounds()
 	while self._active do
 		self.round += 1
 
-		-- Début de manche : réinitialise les drapeaux de tour et recalcule l'ordre.
+		-- Début de manche : réinitialise le verrou anti double-action et recalcule l'ordre.
+		-- Lot 06 — On ne remet PAS la Garde/le malus de Méditer à zéro ici : ces états
+		-- durent « jusqu'au prochain tour personnel » du combattant et sont donc expirés au
+		-- DÉBUT de son prochain tour (voir _takeTurn/_expireDefensiveStates), pas à la
+		-- frontière de manche — sinon une Garde disparaîtrait trop tôt si un ennemi agit
+		-- avant le joueur à la manche suivante.
 		for _, p in self.participants do
 			p.hasActedThisRound = false
-			p.isGuarding = false
 		end
 		local order = Initiative.order(self.participants)
 
@@ -429,6 +457,11 @@ end
 function CombatSession:_takeTurn(participant: CombatParticipant)
 	-- Verrou anti double-action posé dès l'entrée du tour.
 	participant.hasActedThisRound = true
+
+	-- Lot 06 — La Garde et le malus de Méditer du tour personnel PRÉCÉDENT expirent
+	-- exactement ici, au début du prochain tour personnel de ce combattant (pas avant) :
+	-- ils ont protégé/pénalisé toutes les attaques entrantes jusqu'à cet instant.
+	self:_expireDefensiveStates(participant)
 
 	-- Lot 04 — Début du tour personnel : gain de +1 Essence (recharges décomptées
 	-- en fin de tour, voir _endPersonalTurn).
@@ -533,8 +566,19 @@ function CombatSession:_applyAction(participant: CombatParticipant, action: stri
 	self:_applyActionResources(participant, action, false)
 
 	if action == GUARD_ACTION then
+		-- Lot 06 — Garde : utilise tout le tour, aucun QTE défensif, absorbe 70 %
+		-- (50 % sous malus). Active jusqu'au prochain tour personnel (expirée par
+		-- _expireDefensiveStates). Fonctionne aussi en Garde automatique après timeout :
+		-- le timer résout l'action « Garde », qui passe par ce même chemin.
 		self.state:transition(States.Defending)
 		participant.isGuarding = true
+	elseif action == MEDITATE_ACTION then
+		-- Lot 06 — Méditer : le +2 Essence est DÉJÀ accordé par _applyActionResources
+		-- (rule.isMeditate -> Essence.GAIN_MEDITATE) ; on ne le re-crédite PAS ici (pas de
+		-- double gain). On pose seulement le malus défensif, actif jusqu'au prochain tour
+		-- personnel (zone rouge 30 %, Garde 50 % ; parade parfaite jaune inchangée).
+		participant.meditateMalus = true
+		self.state:transition(States.ResolvingAction)
 	else
 		-- Action générique : pas de dégâts ni de kit au lot 02 (résolution neutre).
 		self.state:transition(States.ResolvingAction)
@@ -812,6 +856,26 @@ end
 function CombatSession:_invalidateQte()
 	self._qteChallenge = nil
 	self._pendingOffensive = nil
+	-- Lot 06 — Un QTE défensif éventuellement en cours est aussi invalidé proprement :
+	-- la coroutine en attente est débloquée (abandon, aucun dégât appliqué) et le client
+	-- reçoit une annulation explicite. Couvre changement d'état, fin de combat et nettoyage.
+	self:_invalidateDefensiveQte()
+end
+
+-- Lot 06 — Invalide tout défi de QTE défensif en attente. Si un QTE défensif est en
+-- cours (coroutine cédée dans _runDefensiveQte), on la débloque en mode « abandon » (aucun
+-- dégât appliqué) et on prévient le client pour une annulation visuelle propre. Idempotent.
+function CombatSession:_invalidateDefensiveQte()
+	self._defChallenge = nil
+	local resolve = self._resolveDefense
+	if resolve then
+		self._resolveDefense = nil
+		-- Annulation explicite côté client (le QTE ne pourra plus aboutir).
+		self:_fireDefensiveOutcome({ accepted = false, reason = "cancelled" })
+		-- aborted = true : applyIncomingDamage n'applique aucun dégât (combat qui se termine,
+		-- changement d'état, nettoyage…).
+		resolve(nil, true)
+	end
 end
 
 -- Lot 05 (sécurité) — Demande de démarrage d'un QTE offensif (RemoteFunction). Le serveur
@@ -1067,6 +1131,341 @@ function CombatSession:submitOffensiveQte(player: Player, payload: any): boolean
 
 	local resolve = self._resolveTurn
 	resolve(action)
+	return true
+end
+
+-- ---------------------------------------------------------------------------
+-- QTE défensif, Garde et dégâts entrants — Lot 06
+-- ---------------------------------------------------------------------------
+
+-- Chemin GÉNÉRIQUE et AUTORITAIRE des dégâts entrants. C'est le point d'entrée unique
+-- pour infliger des dégâts à un combattant : il choisit et applique la défense (Garde
+-- sans QTE, QTE défensif pour un joueur, ou dégâts complets faute de défense), recalcule
+-- les dégâts côté serveur (absorption + arrondi + plancher), met à jour les PV et réplique
+-- le résultat au client. Aucune IA/kit/ennemi n'est ajouté ici : seul le chemin existe,
+-- prêt à être appelé par une attaque (lots 08/09) ou par l'outil de test serveur.
+--
+-- IMPORTANT : peut CÉDER (attente d'un QTE défensif) — appeler depuis une coroutine.
+-- opts.context : clé de profil défensif (Config.Qte.Defensive.ProfileByContext).
+-- Renvoie { damage, sideEffects, outcome }.
+function CombatSession:applyIncomingDamage(target: CombatParticipant, rawDamage: number, opts: { [string]: any }?): { [string]: any }
+	opts = opts or {}
+	if not self._active or not target then
+		return { damage = 0, sideEffects = false, outcome = "Aborted" }
+	end
+
+	-- Validation autoritaire des dégâts bruts : nombre fini strictement positif. Une valeur
+	-- absente/NaN/infinie/négative n'inflige rien (aucun QTE, aucun effet secondaire).
+	if type(rawDamage) ~= "number"
+		or rawDamage ~= rawDamage
+		or rawDamage == math.huge
+		or rawDamage == -math.huge
+		or rawDamage <= 0
+	then
+		return { damage = 0, sideEffects = false, outcome = "None" }
+	end
+
+	local mode: string
+	local zone: string? = nil
+
+	if target.isGuarding then
+		-- Garde : aucun QTE défensif pendant l'effet (design-decisions.md).
+		mode = "guard"
+	elseif target.side == "Player" and target.player then
+		-- Défense universelle : QTE défensif à un curseur (peut céder jusqu'à la réponse
+		-- ou le timeout). Renvoie nil si le QTE a été abandonné (fin de combat, nettoyage).
+		mode = "qte"
+		zone = self:_runDefensiveQte(target, opts.context)
+		if zone == nil then
+			return { damage = 0, sideEffects = false, outcome = "Aborted" }
+		end
+	else
+		-- Aucune défense active disponible (ex. ennemi sans Garde : sa défense viendra au
+		-- lot 09) : dégâts complets, traités comme « hors zone ».
+		mode = "qte"
+		zone = "out"
+	end
+
+	local resolution = Qte.resolveDefense({
+		rawDamage = rawDamage,
+		mode = mode,
+		zone = zone,
+		meditateMalus = target.meditateMalus,
+	})
+
+	target.hp = math.max(0, target.hp - resolution.damage)
+
+	local outcome = if mode == "guard" then "Guard" else Qte.defenseOutcomeForZone(zone :: any)
+
+	print(("[CombatSession %s] Dégâts entrants %s : %s (brut %s, -%d PV, absorbe %d%%, effets %s)."):format(
+		self.id,
+		target.displayName,
+		outcome,
+		tostring(rawDamage),
+		resolution.damage,
+		math.floor(resolution.absorb * 100 + 0.5),
+		tostring(resolution.sideEffects)
+	))
+
+	self:_fireDefensiveOutcome({
+		accepted = true,
+		mode = mode,
+		outcome = outcome,
+		damage = resolution.damage,
+		absorb = resolution.absorb,
+		sideEffects = resolution.sideEffects,
+		perfectParry = resolution.perfectParry,
+	})
+
+	-- Rafraîchit l'affichage (PV/Essence non concernés ici, mais bannières Garde/malus oui).
+	self:_firePlayerResources()
+
+	return { damage = resolution.damage, sideEffects = resolution.sideEffects, outcome = outcome }
+end
+
+-- Émet un défi de QTE défensif unique (lié à la session et à la manche), prévient le
+-- client, puis CÈDE jusqu'à la soumission (submitDefensiveQte), le timeout (dégâts
+-- complets) ou l'invalidation (abandon). Renvoie la zone validée ("yellow"/"red"/"out")
+-- ou nil si le QTE a été abandonné. Reprend les principes sécurisés du QTE offensif :
+-- identifiant imprévisible (GUID), usage unique, expiration, validation stricte côté serveur.
+function CombatSession:_runDefensiveQte(target: CombatParticipant, context: any): string?
+	local profile, profileName = Qte.defensiveProfile(if type(context) == "string" then context else nil)
+	if not profile then
+		-- Aucun profil défensif résolu : dégâts complets par sécurité (pas de blocage).
+		return "out"
+	end
+
+	local window = self:_qteWindowSeconds(profile)
+	local now = workspace:GetServerTimeNow()
+	local challenge = {
+		id = HttpService:GenerateGUID(false),
+		context = if type(context) == "string" then context else "Default",
+		profileName = profileName,
+		round = self.round,
+		targetId = target.id,
+		startedAt = now,
+		expiresAt = now + window,
+	}
+	self._defChallenge = challenge
+
+	print(("[CombatSession %s] Défi QTE défensif émis (%s, profil %s)."):format(self.id, challenge.id, profileName))
+	self:_fireDefensiveChallenge(challenge)
+
+	-- Attente coroutine : réveillée par submitDefensiveQte / timeout / invalidation.
+	local thread = coroutine.running()
+	local resolved = false
+	local resultZone: string? = "out"
+
+	local function resolve(z: string?, aborted: boolean?)
+		if resolved then
+			return
+		end
+		resolved = true
+		self._resolveDefense = nil
+		resultZone = if aborted then nil else (z or "out")
+		if coroutine.status(thread) == "suspended" then
+			task.spawn(thread)
+		end
+	end
+	self._resolveDefense = resolve
+
+	-- Timeout du QTE défensif : aucune réponse à temps -> dégâts complets (hors zone).
+	-- Le défi est consommé ici, donc toute soumission tardive sera rejetée.
+	task.delay(window, function()
+		if not resolved and self._active then
+			print(("[CombatSession %s] QTE défensif expiré (%s) : dégâts complets."):format(self.id, challenge.id))
+			self._defChallenge = nil
+			resolve("out")
+		end
+	end)
+
+	coroutine.yield()
+	return resultZone
+end
+
+-- Réplique le défi défensif au client (server -> client) pour qu'il joue le curseur unique.
+function CombatSession:_fireDefensiveChallenge(challenge: any)
+	local ok, remote = pcall(function()
+		return Remotes.get("DefensiveQteChallenge")
+	end)
+	if ok and remote and remote:IsA("RemoteEvent") and self.player and self.player.Parent then
+		remote:FireClient(self.player, {
+			sessionId = self.id,
+			challengeId = challenge.id,
+			profileName = challenge.profileName,
+			context = challenge.context,
+			startedAt = challenge.startedAt,
+			expiresAt = challenge.expiresAt,
+		})
+	end
+end
+
+-- Refus/annulation explicite d'une soumission de QTE défensif : prévient le client pour
+-- une annulation visuelle propre, sans appliquer de dégâts (le QTE reste géré par le
+-- serveur — timeout ou invalidation décideront).
+function CombatSession:_rejectDefensive(reason: string)
+	print(("[CombatSession %s] QTE défensif rejeté (%s)."):format(self.id, tostring(reason)))
+	self:_fireDefensiveOutcome({ accepted = false, reason = tostring(reason) })
+end
+
+-- Réplique au client le verdict autoritaire de la défense (parade/partielle/échec/Garde,
+-- dégâts, absorption, effets secondaires) OU un refus/annulation explicite (accepted=false).
+function CombatSession:_fireDefensiveOutcome(data: { [string]: any })
+	local ok, remote = pcall(function()
+		return Remotes.get("DefensiveQteOutcome")
+	end)
+	if ok and remote and remote:IsA("RemoteEvent") and self.player and self.player.Parent then
+		data.sessionId = self.id
+		remote:FireClient(self.player, data)
+	end
+end
+
+-- Soumission finale d'un QTE défensif (sécurisée, mêmes principes que l'offensif). Le
+-- serveur fait autorité de bout en bout :
+--   * le défi (challengeId) doit exister, correspondre et appartenir à la MANCHE courante ;
+--   * usage unique (consommé) et non expiré ; durée physique raisonnable ;
+--   * position NaN/infinie/hors [0, 1] REJETÉE (aucune correction) ; non arrêté -> hors zone ;
+--   * la zone est RECALCULÉE à partir de la seule position (jamais d'un verdict client).
+-- Tout rejet renvoie une réponse explicite au client (déblocage propre).
+function CombatSession:submitDefensiveQte(player: Player, payload: any): boolean
+	if not self._active then
+		return false
+	end
+	if player ~= self.player then
+		return false
+	end
+	if type(payload) ~= "table" then
+		return false
+	end
+
+	local challenge = self._defChallenge
+	local resolve = self._resolveDefense
+	-- Un QTE défensif doit réellement être en attente, sinon le défi ne correspond plus
+	-- (déjà résolu, expiré, ou invalidé). On le signale au client sans rien appliquer.
+	if not challenge or not resolve then
+		self:_rejectDefensive("no-challenge")
+		return false
+	end
+
+	-- 1) Défi : identifiant présent et correspondant (usage unique).
+	local challengeId = payload.challengeId
+	if type(challengeId) ~= "string" or challenge.id ~= challengeId then
+		self:_rejectDefensive("challenge")
+		return false
+	end
+
+	-- 2) Lié à la MANCHE d'émission (anti-rejeu inter-manches).
+	if challenge.round ~= self.round then
+		self._defChallenge = nil
+		self:_rejectDefensive("stale-round")
+		return false
+	end
+
+	local profile = Qte.defensiveProfileByName(challenge.profileName)
+	if not profile then
+		self._defChallenge = nil
+		self:_rejectDefensive("no-profile")
+		return false
+	end
+
+	-- 3) Expiration et durée physique minimale (anti-rejeu / anti-instantané).
+	local now = workspace:GetServerTimeNow()
+	if now > challenge.expiresAt then
+		self._defChallenge = nil
+		self:_rejectDefensive("expired")
+		return false
+	end
+	local serverElapsed = now - challenge.startedAt
+	if serverElapsed < QteConfig.Challenge.MIN_PHYSICAL_SECONDS then
+		self._defChallenge = nil
+		self:_rejectDefensive("too-fast")
+		return false
+	end
+
+	-- 4) Position : strictement valide si arrêté ; non arrêté (pas de clic) -> hors zone.
+	local position: number? = nil
+	if payload.stopped == true then
+		local pos = payload.position
+		-- Rejet strict : NaN (pos ~= pos), ±infini, ou hors de [0, 1].
+		if type(pos) ~= "number"
+			or pos ~= pos
+			or pos == math.huge
+			or pos == -math.huge
+			or pos < 0
+			or pos > 1
+		then
+			self._defChallenge = nil
+			self:_rejectDefensive("bad-position")
+			return false
+		end
+		position = pos
+	elseif payload.stopped == false then
+		position = nil
+	else
+		self._defChallenge = nil
+		self:_rejectDefensive("bad-stopped")
+		return false
+	end
+
+	-- 5) Durée client OBLIGATOIRE : nombre fini, strictement positif, et ≤ au temps serveur
+	-- observé (plus une tolérance réseau). Absente/NaN/infinie/négative/trop grande : rejet.
+	local clientDuration = payload.duration
+	if type(clientDuration) ~= "number"
+		or clientDuration ~= clientDuration
+		or clientDuration == math.huge
+		or clientDuration == -math.huge
+		or clientDuration <= 0
+		or clientDuration > serverElapsed + QteConfig.Challenge.NETWORK_TOLERANCE_SECONDS
+	then
+		self._defChallenge = nil
+		self:_rejectDefensive("bad-duration")
+		return false
+	end
+
+	-- Zone recalculée côté serveur à partir de la seule position (source autoritaire).
+	local zone = Qte.classify(profile, position)
+
+	-- 6) Une parade/défense (zone jaune ou rouge) doit avoir pris au moins la durée physique
+	-- minimale (déplacement du curseur jusqu'à la position, au réglage dev le plus rapide),
+	-- moins une petite tolérance. Contrôlé à la fois côté serveur et sur la durée annoncée.
+	-- Un arrêt hors zone (mauvais pour le joueur) est exempté : aucune incitation à tricher.
+	if zone ~= "out" then
+		local minSeconds = self:_minPlausibleSeconds(profile, { position })
+		local floor = minSeconds - QteConfig.Challenge.MIN_DURATION_TOLERANCE_SECONDS
+		if serverElapsed < floor or clientDuration < floor then
+			self._defChallenge = nil
+			self:_rejectDefensive("too-fast-physical")
+			return false
+		end
+	end
+
+	-- Défi consommé : usage unique (toute nouvelle soumission du même id sera rejetée).
+	self._defChallenge = nil
+	resolve(zone)
+	return true
+end
+
+-- Outil de test SERVEUR (prototype, lot 06) : simule une attaque entrante sur le joueur
+-- pour exercer le QTE défensif / la Garde / le malus de Méditer SANS ajouter d'IA ni
+-- d'ennemi réel. Lance le chemin générique dans une coroutine (applyIncomingDamage cède).
+-- Branché sur _G.CombatDev par CombatService (à utiliser depuis la console serveur Studio).
+function CombatSession:simulateIncomingAttack(damage: any, context: any): boolean
+	if not self._active then
+		return false
+	end
+	local target = self:_playerParticipant()
+	if not target then
+		return false
+	end
+	-- Un seul QTE défensif à la fois : si une défense est déjà en attente, on ignore (le
+	-- déclencheur de test reste séquentiel, comme le seraient des attaques réelles).
+	if self._resolveDefense then
+		return false
+	end
+	local dmg = if type(damage) == "number" then damage else 4
+	task.spawn(function()
+		self:applyIncomingDamage(target, dmg, { context = context })
+	end)
 	return true
 end
 

@@ -25,6 +25,15 @@ local EVENTS: { string } = {
 	-- Lot 05 — Serveur -> client : verdict autoritaire du QTE offensif (résultat,
 	-- multiplicateur, dégâts) pour l'affichage et l'animation d'échec.
 	"OffensiveQteOutcome",
+	-- Lot 06 — Serveur -> client : défi de QTE défensif émis lors d'une attaque entrante
+	-- (challengeId unique + fenêtre de temps + profil). Le client joue le curseur unique.
+	"DefensiveQteChallenge",
+	-- Lot 06 — Client -> serveur : position saisie du QTE défensif (cite le challengeId).
+	-- Le serveur recalcule la zone de façon autoritaire (jamais de verdict client).
+	"PlayerDefensiveQte",
+	-- Lot 06 — Serveur -> client : verdict autoritaire de la défense (parade/partielle/
+	-- échec/Garde, dégâts, absorption) ou refus/annulation explicite (déblocage propre).
+	"DefensiveQteOutcome",
 }
 
 local FUNCTIONS: { string } = {

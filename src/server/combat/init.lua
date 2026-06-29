@@ -104,6 +104,40 @@ function CombatService.init()
 		end)
 	end
 
+	-- Lot 06 — Route la soumission d'un QTE défensif vers la session du joueur. Le serveur
+	-- valide le défi (usage unique, manche, expiration, position stricte) puis recalcule la
+	-- zone de façon autoritaire avant d'appliquer les dégâts entrants.
+	local defRemote = Remotes.get("PlayerDefensiveQte")
+	if defRemote:IsA("RemoteEvent") then
+		defRemote.OnServerEvent:Connect(function(player: Player, payload: any)
+			local session = sessionsByPlayer[player]
+			if session then
+				session:submitDefensiveQte(player, payload)
+			end
+		end)
+	end
+
+	-- Lot 06 — Outil de test SERVEUR (prototype) : simule une attaque entrante sur le
+	-- joueur pour exercer le QTE défensif / la Garde / le malus de Méditer. Ce n'est PAS
+	-- une IA d'ennemi : juste un déclencheur manuel depuis la console serveur de Studio.
+	-- Exemple : _G.CombatDev.attackPlayer(6)  -- 6 dégâts bruts sur le joueur en combat.
+	_G.CombatDev = {
+		attackPlayer = function(damage: any, context: any, player: Player?): boolean
+			local target = player
+			if not target then
+				for p in sessionsByPlayer do
+					target = p
+					break
+				end
+			end
+			local session = target and sessionsByPlayer[target]
+			if session then
+				return session:simulateIncomingAttack(damage, context)
+			end
+			return false
+		end,
+	}
+
 	-- Filet de sécurité : si une session n'a pas déjà géré le départ du joueur,
 	-- on s'assure que sa référence est libérée.
 	Players.PlayerRemoving:Connect(function(player: Player)
