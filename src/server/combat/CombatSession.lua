@@ -305,6 +305,10 @@ function CombatSession:_firePlayerResources()
 	if ok and remote and remote:IsA("RemoteEvent") and self.player and self.player.Parent then
 		remote:FireClient(self.player, {
 			sessionId = self.id,
+			-- Lot 06 (correctif) — PV répliqués (source autoritaire) : le HUD reflète les
+			-- dégâts subis dès la résolution d'une attaque entrante, sans attendre un tour.
+			hp = p.hp,
+			maxHp = p.maxHp,
 			essence = p.essence,
 			essenceMax = Essence.MAX,
 			turnEndsAt = self._turnEndsAt,
@@ -866,15 +870,40 @@ end
 -- cours (coroutine cédée dans _runDefensiveQte), on la débloque en mode « abandon » (aucun
 -- dégât appliqué) et on prévient le client pour une annulation visuelle propre. Idempotent.
 function CombatSession:_invalidateDefensiveQte()
+	-- On capture l'identifiant du défi courant AVANT de le consommer : l'annulation envoyée
+	-- au client cite ce challengeId pour qu'il ne ferme QUE le QTE défensif correspondant
+	-- (une annulation ne doit jamais fermer un QTE plus récent d'un autre défi).
+	local challenge = self._defChallenge
 	self._defChallenge = nil
 	local resolve = self._resolveDefense
 	if resolve then
 		self._resolveDefense = nil
 		-- Annulation explicite côté client (le QTE ne pourra plus aboutir).
-		self:_fireDefensiveOutcome({ accepted = false, reason = "cancelled" })
+		self:_fireDefensiveOutcome({
+			accepted = false,
+			reason = "cancelled",
+			challengeId = challenge and challenge.id or nil,
+		})
 		-- aborted = true : applyIncomingDamage n'applique aucun dégât (combat qui se termine,
 		-- changement d'état, nettoyage…).
 		resolve(nil, true)
+	end
+end
+
+-- Lot 06 (correctif) — Consomme DÉFINITIVEMENT le défi défensif courant et résout la défense
+-- IMMÉDIATEMENT en « hors zone » (dégâts complets), sans attendre le timeout. À utiliser quand
+-- une soumission correspond bien au défi courant mais est invalide (round périmé, profil
+-- introuvable, expiration, position/forme/durée). Garantit qu'aucune coroutine ne reste
+-- suspendue : la coroutine de _runDefensiveQte est réveillée et applyIncomingDamage applique
+-- alors les dégâts complets et émet l'unique verdict (Miss) de cette attaque entrante. Le
+-- drapeau interne `resolved` du resolve protège contre toute résolution concurrente (timeout).
+function CombatSession:_failDefenseChallenge(reason: string)
+	print(("[CombatSession %s] QTE défensif échoué (%s) : dégâts complets immédiats."):format(self.id, tostring(reason)))
+	self._defChallenge = nil
+	local resolve = self._resolveDefense
+	if resolve then
+		self._resolveDefense = nil
+		resolve("out")
 	end
 end
 
@@ -1167,6 +1196,9 @@ function CombatSession:applyIncomingDamage(target: CombatParticipant, rawDamage:
 
 	local mode: string
 	local zone: string? = nil
+	-- challengeId du défi défensif effectivement joué (nil pour la Garde ou le chemin
+	-- « hors zone » sans QTE) : repliqué au client pour qu'il corrèle le verdict à son défi.
+	local challengeId: string? = nil
 
 	if target.isGuarding then
 		-- Garde : aucun QTE défensif pendant l'effet (design-decisions.md).
@@ -1175,7 +1207,14 @@ function CombatSession:applyIncomingDamage(target: CombatParticipant, rawDamage:
 		-- Défense universelle : QTE défensif à un curseur (peut céder jusqu'à la réponse
 		-- ou le timeout). Renvoie nil si le QTE a été abandonné (fin de combat, nettoyage).
 		mode = "qte"
-		zone = self:_runDefensiveQte(target, opts.context)
+		-- Lot 06 (correctif) — Garde-fou anti-concurrence : ne JAMAIS écraser une défense déjà
+		-- active. Si un défi est déjà émis ou une coroutine déjà cédée, on refuse proprement
+		-- cette seconde défense (aucun dégât, aucune coroutine suspendue, première intacte).
+		if self._defChallenge or self._resolveDefense then
+			print(("[CombatSession %s] Seconde défense concurrente refusée (une défense est déjà en cours)."):format(self.id))
+			return { damage = 0, sideEffects = false, outcome = "Busy" }
+		end
+		zone, challengeId = self:_runDefensiveQte(target, opts.context)
 		if zone == nil then
 			return { damage = 0, sideEffects = false, outcome = "Aborted" }
 		end
@@ -1209,6 +1248,9 @@ function CombatSession:applyIncomingDamage(target: CombatParticipant, rawDamage:
 
 	self:_fireDefensiveOutcome({
 		accepted = true,
+		-- challengeId présent uniquement pour un vrai QTE défensif (nil pour Garde / hors zone
+		-- sans défi) : le client ne ferme son QTE courant que sur correspondance exacte.
+		challengeId = challengeId,
 		mode = mode,
 		outcome = outcome,
 		damage = resolution.damage,
@@ -1228,11 +1270,18 @@ end
 -- complets) ou l'invalidation (abandon). Renvoie la zone validée ("yellow"/"red"/"out")
 -- ou nil si le QTE a été abandonné. Reprend les principes sécurisés du QTE offensif :
 -- identifiant imprévisible (GUID), usage unique, expiration, validation stricte côté serveur.
-function CombatSession:_runDefensiveQte(target: CombatParticipant, context: any): string?
+function CombatSession:_runDefensiveQte(target: CombatParticipant, context: any): (string?, string?)
+	-- Lot 06 (correctif) — Garde-fou : ne JAMAIS écraser un QTE défensif déjà en cours (défi
+	-- émis ou coroutine cédée). On refuse cette seconde défense (nil) sans rien remplacer ni
+	-- laisser de coroutine suspendue (l'appelant traite nil comme « abandon », aucun dégât).
+	if self._defChallenge or self._resolveDefense then
+		return nil, nil
+	end
+
 	local profile, profileName = Qte.defensiveProfile(if type(context) == "string" then context else nil)
 	if not profile then
 		-- Aucun profil défensif résolu : dégâts complets par sécurité (pas de blocage).
-		return "out"
+		return "out", nil
 	end
 
 	local window = self:_qteWindowSeconds(profile)
@@ -1280,7 +1329,9 @@ function CombatSession:_runDefensiveQte(target: CombatParticipant, context: any)
 	end)
 
 	coroutine.yield()
-	return resultZone
+	-- On renvoie aussi le challengeId : applyIncomingDamage le replique dans le verdict pour
+	-- que le client corrèle ce résultat au défi qu'il a joué (et ne ferme que celui-là).
+	return resultZone, challenge.id
 end
 
 -- Réplique le défi défensif au client (server -> client) pour qu'il joue le curseur unique.
@@ -1303,9 +1354,16 @@ end
 -- Refus/annulation explicite d'une soumission de QTE défensif : prévient le client pour
 -- une annulation visuelle propre, sans appliquer de dégâts (le QTE reste géré par le
 -- serveur — timeout ou invalidation décideront).
-function CombatSession:_rejectDefensive(reason: string)
+-- `challengeId` (optionnel) : identifiant cité par la soumission rejetée. On le replique au
+-- client pour qu'il ne ferme son QTE courant QUE si ce rejet concerne bien le défi en cours
+-- (un mauvais challengeId / une soumission sans défi ne doit jamais annuler le QTE légitime).
+function CombatSession:_rejectDefensive(reason: string, challengeId: string?)
 	print(("[CombatSession %s] QTE défensif rejeté (%s)."):format(self.id, tostring(reason)))
-	self:_fireDefensiveOutcome({ accepted = false, reason = tostring(reason) })
+	self:_fireDefensiveOutcome({
+		accepted = false,
+		reason = tostring(reason),
+		challengeId = if type(challengeId) == "string" then challengeId else nil,
+	})
 end
 
 -- Réplique au client le verdict autoritaire de la défense (parade/partielle/échec/Garde,
@@ -1341,44 +1399,49 @@ function CombatSession:submitDefensiveQte(player: Player, payload: any): boolean
 	local challenge = self._defChallenge
 	local resolve = self._resolveDefense
 	-- Un QTE défensif doit réellement être en attente, sinon le défi ne correspond plus
-	-- (déjà résolu, expiré, ou invalidé). On le signale au client sans rien appliquer.
+	-- (déjà résolu, expiré, ou invalidé). On le signale au client SANS rien consommer ni
+	-- résoudre, en citant le challengeId soumis : le client ne fermera son QTE courant que
+	-- si ce rejet correspond à son défi (un rejet sans défi n'annule jamais un autre QTE).
 	if not challenge or not resolve then
-		self:_rejectDefensive("no-challenge")
+		self:_rejectDefensive("no-challenge", if type(payload.challengeId) == "string" then payload.challengeId else nil)
 		return false
 	end
 
-	-- 1) Défi : identifiant présent et correspondant (usage unique).
+	-- 1) Défi : identifiant présent et correspondant. Un MAUVAIS challengeId ne doit JAMAIS
+	-- consommer le défi légitime courant : on rejette seulement (le défi en cours continue
+	-- d'attendre sa soumission correcte ou son timeout), en citant le challengeId soumis.
 	local challengeId = payload.challengeId
 	if type(challengeId) ~= "string" or challenge.id ~= challengeId then
-		self:_rejectDefensive("challenge")
+		self:_rejectDefensive("challenge", if type(challengeId) == "string" then challengeId else nil)
 		return false
 	end
+
+	-- À partir d'ici, la soumission correspond bien au défi COURANT. Toute donnée invalide
+	-- (round, profil, expiration, position, forme, durée) consomme DÉFINITIVEMENT le défi et
+	-- résout la défense immédiatement en « hors zone » (dégâts complets) via _failDefenseChallenge :
+	-- on n'attend jamais le timeout et l'attaque entrante n'est résolue qu'une seule fois.
 
 	-- 2) Lié à la MANCHE d'émission (anti-rejeu inter-manches).
 	if challenge.round ~= self.round then
-		self._defChallenge = nil
-		self:_rejectDefensive("stale-round")
+		self:_failDefenseChallenge("stale-round")
 		return false
 	end
 
 	local profile = Qte.defensiveProfileByName(challenge.profileName)
 	if not profile then
-		self._defChallenge = nil
-		self:_rejectDefensive("no-profile")
+		self:_failDefenseChallenge("no-profile")
 		return false
 	end
 
 	-- 3) Expiration et durée physique minimale (anti-rejeu / anti-instantané).
 	local now = workspace:GetServerTimeNow()
 	if now > challenge.expiresAt then
-		self._defChallenge = nil
-		self:_rejectDefensive("expired")
+		self:_failDefenseChallenge("expired")
 		return false
 	end
 	local serverElapsed = now - challenge.startedAt
 	if serverElapsed < QteConfig.Challenge.MIN_PHYSICAL_SECONDS then
-		self._defChallenge = nil
-		self:_rejectDefensive("too-fast")
+		self:_failDefenseChallenge("too-fast")
 		return false
 	end
 
@@ -1394,16 +1457,14 @@ function CombatSession:submitDefensiveQte(player: Player, payload: any): boolean
 			or pos < 0
 			or pos > 1
 		then
-			self._defChallenge = nil
-			self:_rejectDefensive("bad-position")
+			self:_failDefenseChallenge("bad-position")
 			return false
 		end
 		position = pos
 	elseif payload.stopped == false then
 		position = nil
 	else
-		self._defChallenge = nil
-		self:_rejectDefensive("bad-stopped")
+		self:_failDefenseChallenge("bad-stopped")
 		return false
 	end
 
@@ -1417,8 +1478,7 @@ function CombatSession:submitDefensiveQte(player: Player, payload: any): boolean
 		or clientDuration <= 0
 		or clientDuration > serverElapsed + QteConfig.Challenge.NETWORK_TOLERANCE_SECONDS
 	then
-		self._defChallenge = nil
-		self:_rejectDefensive("bad-duration")
+		self:_failDefenseChallenge("bad-duration")
 		return false
 	end
 
@@ -1433,8 +1493,7 @@ function CombatSession:submitDefensiveQte(player: Player, payload: any): boolean
 		local minSeconds = self:_minPlausibleSeconds(profile, { position })
 		local floor = minSeconds - QteConfig.Challenge.MIN_DURATION_TOLERANCE_SECONDS
 		if serverElapsed < floor or clientDuration < floor then
-			self._defChallenge = nil
-			self:_rejectDefensive("too-fast-physical")
+			self:_failDefenseChallenge("too-fast-physical")
 			return false
 		end
 	end
@@ -1457,9 +1516,10 @@ function CombatSession:simulateIncomingAttack(damage: any, context: any): boolea
 	if not target then
 		return false
 	end
-	-- Un seul QTE défensif à la fois : si une défense est déjà en attente, on ignore (le
-	-- déclencheur de test reste séquentiel, comme le seraient des attaques réelles).
-	if self._resolveDefense then
+	-- Un seul QTE défensif à la fois : si une défense est déjà en attente (défi émis ou
+	-- coroutine cédée), on ignore (le déclencheur de test reste séquentiel, comme le
+	-- seraient des attaques réelles). Le garde-fou d'applyIncomingDamage protège aussi.
+	if self._resolveDefense or self._defChallenge then
 		return false
 	end
 	local dmg = if type(damage) == "number" then damage else 4

@@ -231,14 +231,22 @@ function DefensiveBar:setVerdict(outcome: string?)
 end
 
 -- Courte animation d'échec (secousse + bordure rouge) jouée quand la défense rate
--- (hors zone). Purement visuelle.
-function DefensiveBar:playFailure()
+-- (hors zone). Purement visuelle. `isCurrent` (optionnel) est testé entre chaque image de
+-- la secousse (qui cède la coroutine) : s'il renvoie faux, l'animation s'arrête net sans plus
+-- toucher la barre — utile si le QTE a été annulé/remplacé pendant la secousse.
+function DefensiveBar:playFailure(isCurrent: (() -> boolean)?)
 	local home = self._homePosition
 	self._stroke.Color = VERDICT_COLOR.Miss
 	for i = 1, 6 do
+		if isCurrent and not isCurrent() then
+			return
+		end
 		local offset = (i % 2 == 0) and 10 or -10
 		self._root.Position = home + UDim2.fromOffset(offset, 0)
 		task.wait(0.04)
+	end
+	if isCurrent and not isCurrent() then
+		return
 	end
 	self._root.Position = home
 	TweenService:Create(self._stroke, TweenInfo.new(0.4), { Color = Palette.PanelBorder }):Play()

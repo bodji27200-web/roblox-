@@ -35,22 +35,25 @@ function DefensiveQte.new(parent: Instance)
 	self._bar = DefensiveBar.new(parent)
 	self._speed = DevConfig.DEFAULT_SPEED_MULTIPLIER
 	self._running = false
-	-- Drapeau d'annulation propre et connexion d'entrée du curseur en cours : permettent
-	-- d'arrêter la boucle, de couper la saisie et d'empêcher l'envoi de la charge utile.
-	self._cancelled = false
+	-- Jeton de génération de l'exécution courante (et non un simple booléen partagé) : chaque
+	-- nouvelle exécution capture sa propre valeur. Une coroutine, animation ou reprise
+	-- vérifie que son jeton est toujours le jeton courant avant de toucher la barre, d'afficher
+	-- un verdict, de masquer la barre ou d'appeler onComplete. Une ANCIENNE coroutine (jeton
+	-- périmé) ne peut donc plus jamais modifier ni fermer le QTE suivant.
+	self._runToken = 0
+	-- Connexion d'entrée du curseur en cours (déconnectée à l'annulation/à la fin du curseur).
 	self._activeConn = nil :: RBXScriptConnection?
 	return self
 end
 
 -- Annulation propre du QTE défensif en cours (le contexte est devenu invalide : timeout/
--- verdict serveur reçu, fin de combat, changement de session, nettoyage). Arrête la boucle,
--- coupe la saisie, masque la barre et empêche l'envoi (onComplete ne sera pas rappelé).
--- Sans effet si rien n'est en cours.
+-- verdict serveur reçu, fin de combat, changement de session, nettoyage). Invalide le jeton
+-- courant (toute ancienne coroutine s'arrêtera et n'enverra rien), coupe la saisie et masque
+-- la barre. Idempotent : sans effet visible si rien n'est en cours.
 function DefensiveQte:cancel()
-	if not self._running then
-		return
-	end
-	self._cancelled = true
+	-- Invalider le jeton AVANT tout : une coroutine encore en vol (jeton désormais périmé)
+	-- ne pourra plus modifier la barre, afficher un verdict, la masquer ni rappeler onComplete.
+	self._runToken += 1
 	self._running = false
 	if self._activeConn then
 		self._activeConn:Disconnect()
@@ -88,21 +91,26 @@ function DefensiveQte:playChallenge(profile: DefensiveQteProfile, onComplete: (a
 		return
 	end
 
+	-- Nouvelle exécution : on capture un jeton de génération propre. Toute coroutine d'une
+	-- exécution précédente possède un jeton désormais périmé et ne pourra plus rien faire.
+	self._runToken += 1
+	local token = self._runToken
 	self._running = true
-	self._cancelled = false
 	task.spawn(function()
-		local stopped, position, duration = self:_play(profile)
-		self._running = false
-		-- QTE annulé pendant le jeu : ne JAMAIS envoyer de charge utile.
-		if self._cancelled then
+		local stopped, position, duration = self:_play(profile, token)
+		-- Exécution devenue obsolète (annulée ou remplacée par une plus récente) : ne toucher
+		-- ni au verrou `_running` (la nouvelle exécution le possède) ni à onComplete.
+		if token ~= self._runToken then
 			return
 		end
+		self._running = false
 		onComplete({ stopped = stopped, position = position, duration = duration })
 	end)
 end
 
 -- Déroule le curseur unique et renvoie (stopped, position?, durée physique en secondes).
-function DefensiveQte:_play(profile: DefensiveQteProfile): (boolean, number?, number)
+-- `token` : jeton de génération de cette exécution ; revérifié après chaque attente/animation.
+function DefensiveQte:_play(profile: DefensiveQteProfile, token: number): (boolean, number?, number)
 	local bar = self._bar
 	bar:mount(profile)
 
@@ -110,11 +118,11 @@ function DefensiveQte:_play(profile: DefensiveQteProfile): (boolean, number?, nu
 	-- au serveur pour une validation raisonnable du timing.
 	local playStart = os.clock()
 
-	local position = self:_runCursor(profile)
+	local position = self:_runCursor(profile, token)
 
-	-- QTE annulé en cours de jeu : ne calcule pas de verdict, ne ferme pas (barre déjà
-	-- masquée par cancel()). Les valeurs renvoyées sont ignorées par playChallenge().
-	if self._cancelled then
+	-- Exécution obsolète après l'animation du curseur : ne calcule pas de verdict et ne ferme
+	-- pas (la barre est gérée par l'exécution courante / cancel). Valeurs ignorées en amont.
+	if token ~= self._runToken then
 		return false, nil, 0
 	end
 
@@ -132,11 +140,26 @@ function DefensiveQte:_play(profile: DefensiveQteProfile): (boolean, number?, nu
 	bar:hideCursor()
 	bar:setVerdict(Qte.defenseOutcomeForZone(zone))
 	if zone == "out" then
-		bar:playFailure()
+		-- L'animation d'échec cède la coroutine : on lui passe un test de jeton pour qu'elle
+		-- s'arrête net si l'exécution est annulée/remplacée pendant la secousse.
+		bar:playFailure(function()
+			return token == self._runToken
+		end)
+	end
+
+	-- Revérifie le jeton après l'animation d'échec (qui a pu céder la main) avant d'attendre.
+	if token ~= self._runToken then
+		return false, nil, 0
 	end
 
 	-- Laisse voir le marqueur figé et le verdict avant de fermer.
 	task.wait(0.7)
+
+	-- Une annulation a pu survenir pendant l'attente : ne pas masquer la barre d'une éventuelle
+	-- exécution suivante (cancel a déjà masqué la barre de cette exécution-ci).
+	if token ~= self._runToken then
+		return false, nil, 0
+	end
 	bar:unmount()
 
 	return stopped, position, duration
@@ -144,7 +167,8 @@ end
 
 -- Anime le curseur de gauche à droite ; renvoie la position d'arrêt [0,1] au clic, ou nil
 -- si le curseur atteint le bout sans clic. Souris / tactile / barre d'espace arrêtent.
-function DefensiveQte:_runCursor(profile: DefensiveQteProfile): number?
+-- `token` : jeton de génération ; dès qu'il n'est plus courant, on stoppe sans toucher la barre.
+function DefensiveQte:_runCursor(profile: DefensiveQteProfile, token: number): number?
 	local bar = self._bar
 	-- Vitesse appliquée : durée = base / multiplicateur (>1 accélère, <1 ralentit).
 	local duration = profile.cursorSeconds / self._speed
@@ -169,8 +193,8 @@ function DefensiveQte:_runCursor(profile: DefensiveQteProfile): number?
 	self._activeConn = conn
 
 	while not finished do
-		-- Annulation externe (cancel) : cesse d'animer le curseur immédiatement.
-		if self._cancelled then
+		-- Annulation/remplacement externe : le jeton n'est plus courant -> on cesse d'animer.
+		if token ~= self._runToken then
 			break
 		end
 		local t = (os.clock() - startClock) / duration
@@ -183,12 +207,14 @@ function DefensiveQte:_runCursor(profile: DefensiveQteProfile): number?
 	end
 
 	conn:Disconnect()
+	-- Ne nullifie la connexion partagée que si elle est toujours la nôtre (une exécution plus
+	-- récente a pu installer la sienne entre-temps : on ne doit pas la lui effacer).
 	if self._activeConn == conn then
 		self._activeConn = nil
 	end
 
-	-- Annulé : aucune position d'arrêt valide à remonter.
-	if self._cancelled then
+	-- Obsolète : aucune position d'arrêt valide à remonter (et on ne retouche pas la barre).
+	if token ~= self._runToken then
 		return nil
 	end
 

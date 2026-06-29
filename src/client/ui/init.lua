@@ -193,6 +193,23 @@ function CombatUI:_refreshMenu()
 	self.actionMenu:setEnabled(data.canAct and not self._qteActive and not self._actionPending)
 end
 
+-- Lot 06 (correctif) — Filtre de session pour les événements secondaires (ressources, défi
+-- et verdict défensifs). Un événement appartenant à une AUTRE session que la session courante
+-- est ignoré, et ne remplace JAMAIS la session courante : seul « CombatStateChanged » fait
+-- avancer la session (voir _onServerState). Tant qu'aucune session n'est connue, le premier
+-- événement est accepté (amorçage), sans pour autant fixer la session.
+function CombatUI:_isCurrentSession(payload: { [string]: any }): boolean
+	local sessionId = payload.sessionId
+	if type(sessionId) ~= "string" then
+		-- Pas d'identifiant (ex. simulation manuelle sans session) : on accepte.
+		return true
+	end
+	if self._sessionId == nil then
+		return true
+	end
+	return sessionId == self._sessionId
+end
+
 -- Le joueur a cliqué/tapé une action. Une action offensive (profil de QTE) déclenche
 -- d'abord le QTE ; les autres sont transmises directement au serveur (autoritaire).
 function CombatUI:_onActionChosen(actionId: string)
@@ -311,18 +328,31 @@ function CombatUI:_onDefensiveChallenge(payload: { [string]: any })
 	if type(payload) ~= "table" then
 		return
 	end
+	-- Lot 06 (correctif) — On ignore un défi appartenant à une ancienne session.
+	if not self:_isCurrentSession(payload) then
+		return
+	end
 	local challengeId = payload.challengeId
 	if type(challengeId) ~= "string" then
 		return
 	end
-	-- Un seul QTE défensif à la fois : si un autre tourne, on l'annule proprement avant.
-	if self.defensiveQte:isRunning() then
-		self.defensiveQte:cancel()
+
+	-- Lot 06 (correctif) — Ne pas lancer visuellement un défi DÉJÀ expiré (horloge serveur
+	-- synchronisée) : inutile d'ouvrir une barre que le serveur a déjà (ou va) résoudre.
+	local expiresAt = payload.expiresAt
+	if type(expiresAt) == "number" and Workspace:GetServerTimeNow() > expiresAt then
+		return
 	end
 
 	local profile = Qte.defensiveProfileByName(payload.profileName)
 	if not profile then
 		return
+	end
+
+	-- Un seul QTE défensif à la fois : si un autre tourne, on l'annule proprement avant
+	-- (le jeton de génération de DefensiveQte empêche l'ancienne coroutine d'agir ensuite).
+	if self.defensiveQte:isRunning() then
+		self.defensiveQte:cancel()
 	end
 
 	self._defChallengeId = challengeId
@@ -358,13 +388,29 @@ function CombatUI:_onDefensiveOutcome(payload: { [string]: any })
 	if type(payload) ~= "table" then
 		return
 	end
+	-- Lot 06 (correctif) — On ignore un verdict appartenant à une ancienne session.
+	if not self:_isCurrentSession(payload) then
+		return
+	end
+
+	-- Lot 06 (correctif) — Corrélation par challengeId : on ne FERME le QTE défensif courant
+	-- que si le verdict cite exactement le défi en cours (`_defChallengeId`). Ainsi un résultat
+	-- ancien — ou un verdict de Garde sans défi (challengeId nil) — n'annule jamais un QTE plus
+	-- récent. L'affichage du message reste, lui, indépendant de cette fermeture.
+	local challengeId = payload.challengeId
+	local matchesCurrent = type(challengeId) == "string"
+		and self._defChallengeId ~= nil
+		and challengeId == self._defChallengeId
 
 	-- Refus/annulation : le serveur a invalidé ou rejeté ce QTE (timeout déjà résolu,
-	-- fin de combat, défi périmé…). On annule visuellement la barre encore ouverte.
+	-- fin de combat, défi périmé…). On n'annule visuellement la barre que si ce refus
+	-- concerne bien le défi courant.
 	if payload.accepted == false then
-		self._defChallengeId = nil
-		if self.defensiveQte:isRunning() then
-			self.defensiveQte:cancel()
+		if matchesCurrent then
+			self._defChallengeId = nil
+			if self.defensiveQte:isRunning() then
+				self.defensiveQte:cancel()
+			end
 		end
 		local reason = tostring(payload.reason)
 		-- L'annulation « cancelled » (fin/nettoyage) reste silencieuse côté journal.
@@ -374,11 +420,13 @@ function CombatUI:_onDefensiveOutcome(payload: { [string]: any })
 		return
 	end
 
-	self._defChallengeId = nil
-	-- Le serveur a pu résoudre sans soumission (timeout / Garde) : si la barre tourne
-	-- encore, on la coupe proprement avant d'afficher le verdict.
-	if self.defensiveQte:isRunning() then
-		self.defensiveQte:cancel()
+	-- Verdict accepté : ne ferme la barre courante que sur correspondance exacte du défi
+	-- (le serveur a pu résoudre sans soumission, p. ex. timeout, et la barre tourne encore).
+	if matchesCurrent then
+		self._defChallengeId = nil
+		if self.defensiveQte:isRunning() then
+			self.defensiveQte:cancel()
+		end
 	end
 
 	local Labels = Config.UI.Labels
@@ -421,7 +469,9 @@ function CombatUI:start()
 	end)
 	if okRes and resRemote and resRemote:IsA("RemoteEvent") then
 		resRemote.OnClientEvent:Connect(function(payload)
-			if type(payload) == "table" then
+			-- Lot 06 (correctif) — On ignore un instantané de ressources d'une ancienne session
+			-- (il ne doit ni écraser les PV/Essence courants ni replacer la session).
+			if type(payload) == "table" and self:_isCurrentSession(payload) then
 				self.state:applyResources(payload)
 			end
 		end)
