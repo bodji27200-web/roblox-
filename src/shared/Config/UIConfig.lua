@@ -94,6 +94,22 @@ local UIConfig = {
 		EssenceCost = "%d ✦", -- coût en Essence d'une action
 		Cooldown = "⌛ %d", -- recharge restante, en tours personnels
 		TurnTimer = "⏱ %ds", -- chronomètre du tour personnel
+
+		-- Lot 06 — QTE défensif, verdicts et bannières d'état défensif.
+		DefenseTitle = "QTE défensif",
+		DefenseInstruction = "Parez : arrêtez le curseur dans la zone.",
+		DefenseVerdictParry = "Parade parfaite !",
+		DefenseVerdictPartial = "Défense partielle",
+		DefenseVerdictMiss = "Échec — coup complet !",
+		-- Messages du journal (zone centrale) après résolution serveur de la défense.
+		DefenseParryMsg = "Parade parfaite ! Aucun dégât.",
+		DefensePartialMsg = "Défense partielle : %d dégâts encaissés.",
+		DefenseMissMsg = "Défense ratée : %d dégâts encaissés.",
+		GuardAbsorbMsg = "Garde : %d dégâts encaissés.",
+		DefenseRejectedMsg = "QTE défensif interrompu (%s).",
+		-- Bannières d'état (affichées tant que l'effet est actif).
+		GuardActive = "🛡 Garde active",
+		MeditateMalus = "🌀 Méditation : défense réduite",
 	},
 
 	-- Les cinq actions du menu de droite. L'id est la valeur envoyée au serveur

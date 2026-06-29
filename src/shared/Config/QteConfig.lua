@@ -78,6 +78,37 @@ local QteConfig = {
 	ProfileByAction = {
 		Attaque = "AttaqueStandard",
 	},
+
+	-- Lot 06 — QTE défensif universel : UN SEUL curseur traverse la barre. Même
+	-- géométrie de zones que le profil offensif (zone jaune « parade parfaite » plus
+	-- petite que la zone rouge « défense normale » ; au-delà du rouge = hors zone). Les
+	-- pourcentages d'absorption restent centralisés dans CombatConfig.DEFENSE /
+	-- CombatConfig.MEDITATE_MALUS : ici, uniquement la géométrie et le rythme.
+	--
+	-- La sécurité du défi (challenge) réutilise la même section `Challenge` ci-dessus :
+	-- les constantes anti-rejeu / anti-instantané sont génériques (offensif comme défensif).
+	Defensive = {
+		Profiles = {
+			-- Profil de défense par défaut (attaque générique du prototype).
+			DefenseStandard = {
+				cursorCount = 1,
+				center = 0.5,
+				yellowHalfWidth = 0.07, -- zone jaune (parade parfaite) : largeur 0.14
+				redHalfWidth = 0.25, -- zone rouge (défense normale) : largeur 0.50
+				cursorSeconds = 1.3, -- temps pour traverser toute la barre
+				spacingSeconds = 0, -- un seul curseur : aucun espacement
+			},
+		},
+
+		-- Profil utilisé quand aucun contexte précis n'est fourni.
+		DefaultProfile = "DefenseStandard",
+
+		-- Association contexte d'attaque -> profil défensif. Les attaques futures
+		-- (kits/ennemis des lots 07/08) ajouteront leurs entrées sans toucher au moteur.
+		ProfileByContext = {
+			Default = "DefenseStandard",
+		},
+	},
 }
 
 return QteConfig

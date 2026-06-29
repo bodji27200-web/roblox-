@@ -77,6 +77,48 @@ export type OffensiveQteResult = {
 	cancelled: boolean,
 }
 
+-- Lot 06 — QTE défensif universel à UN SEUL curseur. Même géométrie de zones que le
+-- profil offensif (centre + demi-largeurs jaune/rouge), réutilisée telle quelle.
+export type DefensiveQteProfile = {
+	cursorCount: number, -- toujours 1 pour un QTE défensif (curseur unique)
+	center: number,
+	yellowHalfWidth: number,
+	redHalfWidth: number,
+	cursorSeconds: number,
+	spacingSeconds: number,
+}
+
+-- Défi défensif émis par le serveur (server -> client). Le client résout le profil
+-- via `profileName` (source unique = configuration) ; le serveur reste autoritaire.
+export type DefensiveQteChallenge = {
+	sessionId: string,
+	challengeId: string,
+	profileName: string,
+	context: string,
+	startedAt: number,
+	expiresAt: number,
+}
+
+-- Soumission d'un QTE défensif (client -> serveur). Le serveur recalcule la zone à
+-- partir de la position (jamais d'un verdict prêt à l'emploi venu du client).
+export type DefensiveQtePayload = {
+	challengeId: string,
+	stopped: boolean,
+	position: number?,
+	duration: number,
+}
+
+-- Résolution autoritaire d'une défense (dégâts entrants), calculée côté serveur via la
+-- logique partagée. `sideEffects` indique si les effets secondaires s'appliquent (les
+-- effets réels ne sont PAS développés dans ce lot, seul le drapeau est porté).
+export type DefenseResolution = {
+	absorb: number, -- proportion absorbée [0, 1]
+	perfectParry: boolean, -- parade parfaite (annulation totale)
+	sideEffects: boolean, -- les effets secondaires peuvent s'appliquer
+	damage: number, -- dégâts finaux entiers infligés
+	cancelled: boolean, -- attaque totalement annulée (= parade parfaite)
+}
+
 -- Lot 02 — Moteur de combat et tours.
 -- États possibles de la machine à états d'une session de combat (serveur autoritaire).
 export type CombatState =
@@ -108,6 +150,8 @@ export type CombatParticipant = {
 	model: Instance?,
 	-- État de manche : Garde active et verrou anti double-action.
 	isGuarding: boolean,
+	-- Lot 06 — Malus défensif de Méditer, actif jusqu'au prochain tour personnel.
+	meditateMalus: boolean,
 	hasActedThisRound: boolean,
 	-- Lot 04 — Ressource Essence et recharges, autoritaires côté serveur.
 	essence: number,

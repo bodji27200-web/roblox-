@@ -31,6 +31,8 @@ local TurnOrder = require(script:WaitForChild("TurnOrder"))
 local CenterZone = require(script:WaitForChild("CenterZone"))
 -- Lot 05 — Contrôleur du QTE offensif (rendu de la barre + saisie des curseurs).
 local OffensiveQte = require(script.Parent:WaitForChild("qte"))
+-- Lot 06 — Contrôleur du QTE défensif (curseur unique, déclenché par le serveur).
+local DefensiveQte = require(script.Parent:WaitForChild("qte"):WaitForChild("DefensiveQte"))
 
 local UI = Config.UI
 
@@ -90,6 +92,12 @@ function CombatUI.new()
 	-- doit annuler tout QTE encore en cours (charge utile devenue obsolète).
 	self._sessionId = nil :: any
 
+	-- Lot 06 — QTE défensif (déclenché par le serveur lors d'une attaque entrante). Le défi
+	-- en cours est suivi par son challengeId : toute soumission cite ce dernier. Le QTE
+	-- défensif est réactif (hors phase de choix) et n'utilise donc pas les verrous de menu.
+	self.defensiveQte = DefensiveQte.new(gui)
+	self._defChallengeId = nil :: any
+
 	-- Abonnements : chaque composant se redessine quand l'état change.
 	self.state:subscribe(function(data)
 		self.hud:render(data)
@@ -145,6 +153,21 @@ function CombatUI:_onServerState(payload: { [string]: any })
 		self._qteActive = false
 		self._actionPending = false
 	end
+
+	-- Lot 06 — Le QTE défensif est réactif (pas lié à ChoosingAction) : on l'annule
+	-- proprement dès que la rencontre change ou que le combat se termine. Le serveur
+	-- envoie aussi une annulation explicite (DefensiveQteOutcome) via _invalidateQte ;
+	-- ce filet client garantit qu'aucune barre ne reste affichée et qu'aucune charge
+	-- utile périmée n'est envoyée.
+	if sessionChanged or combatEnded then
+		-- On invalide le défi courant (aucune soumission tardive) et on coupe la barre
+		-- si elle tourne encore.
+		self._defChallengeId = nil
+		if self.defensiveQte:isRunning() then
+			self.defensiveQte:cancel()
+		end
+	end
+
 	self._sessionId = newSessionId
 
 	if newState ~= previous then
@@ -280,6 +303,100 @@ function CombatUI:_onOffensiveOutcome(payload: { [string]: any })
 	self.state:pushMessage(message)
 end
 
+-- Lot 06 — Défi de QTE défensif émis par le serveur (attaque entrante). On résout le
+-- profil depuis la configuration (source unique, via le nom transmis), on joue le curseur
+-- unique, puis on soumet la position au serveur (autoritaire) avec le challengeId. Le
+-- client n'applique aucun effet : le serveur recalcule zone, dégâts et absorption.
+function CombatUI:_onDefensiveChallenge(payload: { [string]: any })
+	if type(payload) ~= "table" then
+		return
+	end
+	local challengeId = payload.challengeId
+	if type(challengeId) ~= "string" then
+		return
+	end
+	-- Un seul QTE défensif à la fois : si un autre tourne, on l'annule proprement avant.
+	if self.defensiveQte:isRunning() then
+		self.defensiveQte:cancel()
+	end
+
+	local profile = Qte.defensiveProfileByName(payload.profileName)
+	if not profile then
+		return
+	end
+
+	self._defChallengeId = challengeId
+	self.state:pushMessage("Attaque ! Parez : arrêtez le curseur dans la zone.")
+
+	self.defensiveQte:playChallenge(profile, function(result)
+		-- Le contexte a pu changer pendant le jeu : on ne soumet que si ce défi est
+		-- toujours le défi courant (sinon une annulation a déjà eu lieu).
+		if self._defChallengeId ~= challengeId then
+			return
+		end
+		if not result then
+			return
+		end
+		pcall(function()
+			local remote = Remotes.get("PlayerDefensiveQte")
+			if remote and remote:IsA("RemoteEvent") then
+				remote:FireServer({
+					challengeId = challengeId,
+					stopped = result.stopped,
+					position = result.position,
+					duration = result.duration,
+				})
+			end
+		end)
+	end)
+end
+
+-- Lot 06 — Verdict autoritaire de la défense (affichage seul). Couvre la résolution
+-- (parade parfaite / défense partielle / échec / Garde) et le refus/annulation explicite
+-- (déblocage propre : on coupe la barre si elle tourne encore).
+function CombatUI:_onDefensiveOutcome(payload: { [string]: any })
+	if type(payload) ~= "table" then
+		return
+	end
+
+	-- Refus/annulation : le serveur a invalidé ou rejeté ce QTE (timeout déjà résolu,
+	-- fin de combat, défi périmé…). On annule visuellement la barre encore ouverte.
+	if payload.accepted == false then
+		self._defChallengeId = nil
+		if self.defensiveQte:isRunning() then
+			self.defensiveQte:cancel()
+		end
+		local reason = tostring(payload.reason)
+		-- L'annulation « cancelled » (fin/nettoyage) reste silencieuse côté journal.
+		if reason ~= "cancelled" then
+			self.state:pushMessage((Config.UI.Labels.DefenseRejectedMsg):format(reason))
+		end
+		return
+	end
+
+	self._defChallengeId = nil
+	-- Le serveur a pu résoudre sans soumission (timeout / Garde) : si la barre tourne
+	-- encore, on la coupe proprement avant d'afficher le verdict.
+	if self.defensiveQte:isRunning() then
+		self.defensiveQte:cancel()
+	end
+
+	local Labels = Config.UI.Labels
+	local damage = if type(payload.damage) == "number" then payload.damage else 0
+	local outcome = payload.outcome
+	local message: string
+	if payload.mode == "guard" then
+		message = (Labels.GuardAbsorbMsg):format(damage)
+	elseif outcome == "PerfectParry" then
+		message = Labels.DefenseParryMsg
+	elseif outcome == "Normal" then
+		message = (Labels.DefensePartialMsg):format(damage)
+	else
+		message = (Labels.DefenseMissMsg):format(damage)
+	end
+	self.state:pushMessage(message)
+end
+
 -- Démarre l'UI : parente le ScreenGui et écoute le serveur.
 function CombatUI:start()
 	local player = Players.LocalPlayer
@@ -317,6 +434,26 @@ function CombatUI:start()
 	if okQte and qteRemote and qteRemote:IsA("RemoteEvent") then
 		qteRemote.OnClientEvent:Connect(function(payload)
 			self:_onOffensiveOutcome(payload)
+		end)
+	end
+
+	-- Lot 06 — Défi de QTE défensif (server -> client) : déclenche le curseur unique.
+	local okDef, defRemote = pcall(function()
+		return Remotes.get("DefensiveQteChallenge")
+	end)
+	if okDef and defRemote and defRemote:IsA("RemoteEvent") then
+		defRemote.OnClientEvent:Connect(function(payload)
+			self:_onDefensiveChallenge(payload)
+		end)
+	end
+
+	-- Lot 06 — Verdict autoritaire de la défense (server -> client) : affichage/annulation.
+	local okDefOut, defOutRemote = pcall(function()
+		return Remotes.get("DefensiveQteOutcome")
+	end)
+	if okDefOut and defOutRemote and defOutRemote:IsA("RemoteEvent") then
+		defOutRemote.OnClientEvent:Connect(function(payload)
+			self:_onDefensiveOutcome(payload)
 		end)
 	end
 

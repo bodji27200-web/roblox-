@@ -59,7 +59,7 @@ juste pour le hash.
 | 03 | Interface de combat | TERMINÉ | 02 | | 2026-06-29 |
 | 04 | Essence, actions et cooldowns | TERMINÉ | 02, 03 | | 2026-06-29 |
 | 05 | QTE offensif | TERMINÉ | 03, 04 | | 2026-06-29 |
-| 06 | QTE défensif, Garde et Méditer | EN ATTENTE DU LOT PRÉCÉDENT | 03, 04 | | 2026-06-29 |
+| 06 | QTE défensif, Garde et Méditer | TERMINÉ | 03, 04 | | 2026-06-29 |
 | 07 | Épéiste niveau 1 | EN ATTENTE DU LOT PRÉCÉDENT | 04, 05, 06 | | 2026-06-29 |
 | 08 | Loup, Bandit et IA | EN ATTENTE DU LOT PRÉCÉDENT | 02, 05, 06 | | 2026-06-29 |
 | 09 | Parades, ripostes et défense ennemie | EN ATTENTE DU LOT PRÉCÉDENT | 06, 08 | | 2026-06-29 |

@@ -50,11 +50,31 @@ function CenterZone.new(parent: Instance)
 	timer.LayoutOrder = 0
 	timer.Parent = frame
 
+	-- Lot 06 — Bannières d'état défensif (Garde active / malus de Méditer), masquées
+	-- tant que l'effet n'est pas actif. Pur affichage piloté par l'état serveur répliqué.
+	local guardBanner = Helpers.label("GuardBanner", Labels.GuardActive, Fonts.Value, 16)
+	guardBanner.TextColor3 = Palette.Accent
+	guardBanner.TextXAlignment = Enum.TextXAlignment.Center
+	guardBanner.Size = UDim2.new(1, 0, 0, 20)
+	guardBanner.Visible = false
+	guardBanner.LayoutOrder = 1
+	guardBanner.Parent = frame
+	self._guardBanner = guardBanner
+
+	local malusBanner = Helpers.label("MalusBanner", Labels.MeditateMalus, Fonts.Value, 16)
+	malusBanner.TextColor3 = Palette.SoulFilled
+	malusBanner.TextXAlignment = Enum.TextXAlignment.Center
+	malusBanner.Size = UDim2.new(1, 0, 0, 20)
+	malusBanner.Visible = false
+	malusBanner.LayoutOrder = 2
+	malusBanner.Parent = frame
+	self._malusBanner = malusBanner
+
 	-- Emplacement QTE (placeholder, masqué tant qu'aucun combat n'est en cours).
 	local qte = Helpers.panel("QtePlaceholder")
 	qte.BackgroundTransparency = 0.4
 	qte.Size = UDim2.new(0.7, 0, 0, 56)
-	qte.LayoutOrder = 1
+	qte.LayoutOrder = 3
 	local qteStroke = qte:FindFirstChildOfClass("UIStroke")
 	if qteStroke then
 		qteStroke.LineJoinMode = Enum.LineJoinMode.Round
@@ -73,7 +93,7 @@ function CenterZone.new(parent: Instance)
 	log.BackgroundTransparency = 1
 	log.Size = UDim2.new(1, 0, 0, 0)
 	log.AutomaticSize = Enum.AutomaticSize.Y
-	log.LayoutOrder = 2
+	log.LayoutOrder = 4
 	log.Parent = frame
 
 	local logList = Instance.new("UIListLayout")
@@ -106,6 +126,10 @@ end
 function CenterZone:render(data)
 	-- L'emplacement QTE n'apparaît que pendant un combat (placeholder neutre sinon).
 	self._qte.Visible = data.inCombat
+
+	-- Lot 06 — Bannières d'état défensif, pilotées par l'état serveur répliqué.
+	self._guardBanner.Visible = data.inCombat and data.guardActive == true
+	self._malusBanner.Visible = data.inCombat and data.meditateMalus == true
 
 	-- Reconstruit le journal des messages (simple, peu d'entrées : MaxMessages borné).
 	for _, child in self._log:GetChildren() do

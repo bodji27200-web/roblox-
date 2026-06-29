@@ -35,4 +35,19 @@ _G.OffensiveQte = {
 	end,
 }
 
-print("[Client] Interface de combat prête (lot 03) ; QTE offensif prêt (lot 05).")
+-- Lot 06 — Outil développeur : ralentir/accélérer le QTE défensif pendant les tests
+-- (le curseur unique va vite : un ralenti aide à viser les zones jaune/rouge). Pour
+-- déclencher une attaque entrante de test, utiliser _G.CombatDev.attackPlayer(...) côté
+-- SERVEUR (console serveur Studio).
+_G.DefensiveQte = {
+	setSpeed = function(multiplier: number): number
+		local applied = ui.defensiveQte:setSpeedMultiplier(multiplier)
+		print(("[DefensiveQte] Vitesse du QTE défensif réglée à x%.2f."):format(applied))
+		return applied
+	end,
+	getSpeed = function(): number
+		return ui.defensiveQte:getSpeedMultiplier()
+	end,
+}
+
+print("[Client] Interface de combat prête (lot 03) ; QTE offensif (lot 05) et défensif (lot 06) prêts.")
