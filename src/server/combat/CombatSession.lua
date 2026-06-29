@@ -18,6 +18,8 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared:WaitForChild("Config"))
 local Remotes = require(Shared:WaitForChild("Remotes"))
 local Types = require(Shared:WaitForChild("Types"))
+-- Lot 05 — Logique partagée du QTE offensif (verdict recalculé côté serveur).
+local Qte = require(Shared:WaitForChild("Qte"))
 
 local CombatState = require(script.Parent:WaitForChild("CombatState"))
 local Initiative = require(script.Parent:WaitForChild("Initiative"))
@@ -35,6 +37,10 @@ local ESCAPE_ACTION = "Fuite"
 -- Lot 04 — Configuration Essence/cooldowns (autoritaire côté serveur).
 local Essence = Config.Essence
 local ActionRules = Config.ActionRules
+
+-- Lot 05 — Configuration du QTE offensif (profils, dégâts de base) et règles de dégâts.
+local QteConfig = Config.Qte
+local DAMAGE = Config.Combat.DAMAGE
 
 local CombatSession = {}
 CombatSession.__index = CombatSession
@@ -61,6 +67,9 @@ function CombatSession.new(service: any, player: Player, creatureKey: string)
 	self._cleaned = false
 	-- Fonction de résolution du tour joueur en attente (nil si aucun tour en attente).
 	self._resolveTurn = nil :: ((action: string) -> ())?
+	-- Lot 05 — Verdict d'un QTE offensif en attente d'application (posé avant de
+	-- résoudre le tour, consommé dans _applyAction). nil si l'action n'a pas de QTE.
+	self._pendingOffensive = nil :: { action: string, outcome: string, multiplier: number, cancelled: boolean }?
 	-- Lot 04 — Horodatage serveur synchronisé de fin du tour joueur (chronomètre UI).
 	self._turnEndsAt = nil :: number?
 	-- Suivi pour le nettoyage fiable.
@@ -494,6 +503,15 @@ function CombatSession:_applyAction(participant: CombatParticipant, action: stri
 		return
 	end
 
+	-- Lot 05 — Action offensive résolue via un QTE : applique le verdict en attente
+	-- (bonus parfait, normal, ou annulation avec ressources/tour tout de même consommés).
+	local offensive = self._pendingOffensive
+	if offensive and offensive.action == action then
+		self._pendingOffensive = nil
+		self:_resolveOffensive(participant, action, offensive)
+		return
+	end
+
 	-- Lot 04 — Conséquences Essence/recharge de l'action résolue (coût, gain, cooldown).
 	-- `cancelled` reste faux ici : l'annulation provient du QTE offensif (lot 05).
 	self:_applyActionResources(participant, action, false)
@@ -506,6 +524,73 @@ function CombatSession:_applyAction(participant: CombatParticipant, action: stri
 		self.state:transition(States.ResolvingAction)
 	end
 	self:_fireState()
+end
+
+-- ---------------------------------------------------------------------------
+-- QTE offensif — Lot 05
+-- ---------------------------------------------------------------------------
+
+-- Applique le verdict d'un QTE offensif déjà calculé (autoritaire).
+-- Dans TOUS les cas le tour et les ressources sont consommés : c'est `cancelled` qui
+-- distingue une annulation (aucun gain d'Essence d'attaque, aucun dégât, animation
+-- d'échec côté client) d'une attaque réussie (dégâts éventuellement bonifiés de +20 %).
+function CombatSession:_resolveOffensive(participant: CombatParticipant, action: string, offensive: any)
+	local cancelled: boolean = offensive.cancelled == true
+
+	-- Ressources/tour consommés même en cas d'annulation (cancelled propagé : pas de
+	-- gain d'Essence d'attaque de base si annulée, recharge tout de même armée).
+	self:_applyActionResources(participant, action, cancelled)
+
+	-- Dégâts appliqués uniquement si l'attaque n'a pas été annulée (bonus inclus).
+	local damage = 0
+	if not cancelled then
+		damage = self:_applyOffensiveDamage(participant, offensive.multiplier)
+	end
+
+	-- Résolution neutre côté machine à états (l'échec se traduit visuellement côté
+	-- client via OffensiveQteOutcome ; pas d'état dédié pour ne pas toucher au lot 02).
+	self.state:transition(States.ResolvingAction)
+	self:_fireState()
+
+	print(("[CombatSession %s] QTE offensif « %s » : %s (x%.2f, %d dégâts)."):format(
+		self.id, action, tostring(offensive.outcome), offensive.multiplier, damage
+	))
+
+	self:_fireOffensiveOutcome(action, offensive.outcome, offensive.multiplier, damage)
+end
+
+-- Inflige les dégâts d'une attaque offensive à la cible adverse, multiplicateur du QTE
+-- inclus (1.0 normale, 1.2 parfaite). Dégâts de base provisoires (QteConfig) ; arrondi
+-- et plancher repris des règles de dégâts du prototype (CombatConfig.DAMAGE).
+function CombatSession:_applyOffensiveDamage(attacker: CombatParticipant, multiplier: number): number
+	local target = if attacker.side == "Player" then self:_enemyParticipant() else self:_playerParticipant()
+	if not target then
+		return 0
+	end
+
+	local raw = QteConfig.BASE_ATTACK_DAMAGE * multiplier
+	local dmg = if DAMAGE.ROUND_REMAINING_UP then math.ceil(raw) else math.floor(raw)
+	-- Une attaque non annulée inflige au minimum le plancher de dégâts du prototype.
+	dmg = math.max(dmg, DAMAGE.MIN_DAMAGE_IF_NOT_CANCELLED)
+
+	target.hp = math.max(0, target.hp - dmg)
+	return dmg
+end
+
+-- Réplique au client le verdict autoritaire du QTE offensif (affichage + animation).
+function CombatSession:_fireOffensiveOutcome(action: string, outcome: string, multiplier: number, damage: number)
+	local ok, remote = pcall(function()
+		return Remotes.get("OffensiveQteOutcome")
+	end)
+	if ok and remote and remote:IsA("RemoteEvent") and self.player and self.player.Parent then
+		remote:FireClient(self.player, {
+			sessionId = self.id,
+			action = action,
+			outcome = outcome,
+			multiplier = multiplier,
+			damage = damage,
+		})
+	end
 end
 
 -- Conditions de fin basées sur les PV. Au lot 02 aucun dégât n'est infligé : le
@@ -648,6 +733,83 @@ function CombatSession:submitAction(player: Player, action: string): boolean
 			return false
 		end
 	end
+
+	resolve(action)
+	return true
+end
+
+-- Soumission du résultat d'un QTE offensif par le joueur (Lot 05). Le serveur fait
+-- autorité : il revérifie le tour, valide l'usage de l'action, puis RECALCULE le
+-- verdict à partir des seules positions des curseurs (il ne fait jamais confiance à un
+-- verdict envoyé par le client). Validation raisonnable (pas d'anti-cheat lourd) :
+--   * structure de la charge utile et nombre de curseurs conformes au profil ;
+--   * positions bornées à [0, 1] ; un curseur non arrêté compte comme « hors zone ».
+-- Une charge utile structurellement incohérente est ignorée (le tour reste en attente :
+-- le joueur peut rejouer), comme pour une action invalide.
+function CombatSession:submitOffensiveQte(player: Player, payload: any): boolean
+	if not self._active then
+		return false
+	end
+	if player ~= self.player then
+		return false
+	end
+	if self.state:get() ~= States.ChoosingAction then
+		return false
+	end
+	local resolve = self._resolveTurn
+	if not resolve then
+		return false
+	end
+	if type(payload) ~= "table" then
+		return false
+	end
+
+	local action = payload.action
+	if type(action) ~= "string" then
+		return false
+	end
+
+	-- L'action doit posséder un profil de QTE offensif (sinon ce n'est pas un QTE).
+	local profile = Qte.profileForAction(action)
+	if not profile then
+		return false
+	end
+
+	-- Validation Essence/recharge identique aux autres actions (autoritaire).
+	local participant = self:_playerParticipant()
+	if participant then
+		local allowed, reason = self:_canUseAction(participant, action)
+		if not allowed then
+			print(("[CombatSession %s] QTE « %s » refusé (%s)."):format(self.id, action, tostring(reason)))
+			self:_firePlayerResources()
+			return false
+		end
+	end
+
+	-- Le nombre de curseurs doit correspondre au profil (rejet d'une réponse forgée).
+	local cursors = payload.cursors
+	if type(cursors) ~= "table" or #cursors ~= profile.cursorCount then
+		print(("[CombatSession %s] QTE « %s » incohérent (curseurs)."):format(self.id, action))
+		return false
+	end
+
+	-- Reconstruit les positions arrêtées (bornées) ; un curseur non arrêté = hors zone.
+	local positions: { number? } = {}
+	for i = 1, profile.cursorCount do
+		local cursor = cursors[i]
+		local stopped = type(cursor) == "table" and cursor.stopped == true
+		local pos = stopped and type(cursor.position) == "number" and math.clamp(cursor.position, 0, 1) or nil
+		positions[i] = pos
+	end
+
+	-- Verdict recalculé côté serveur à partir des positions (source autoritaire).
+	local result = Qte.computeOutcome(profile, positions)
+	self._pendingOffensive = {
+		action = action,
+		outcome = result.outcome,
+		multiplier = result.multiplier,
+		cancelled = result.cancelled,
+	}
 
 	resolve(action)
 	return true

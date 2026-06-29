@@ -41,6 +41,42 @@ export type DefenseOutcome = "PerfectParry" | "Normal" | "Miss"
 -- Résultat possible d'un QTE offensif.
 export type AttackOutcome = "Perfect" | "Normal" | "Cancelled"
 
+-- Lot 05 — QTE offensif.
+-- Classement d'un curseur arrêté : zone jaune (parfait), rouge (toléré) ou hors zone.
+export type QteZone = "yellow" | "red" | "out"
+
+-- Profil configurable d'un QTE offensif (centralisé dans QteConfig).
+export type OffensiveQteProfile = {
+	cursorCount: number,
+	center: number,
+	yellowHalfWidth: number,
+	redHalfWidth: number,
+	cursorSeconds: number,
+	spacingSeconds: number,
+}
+
+-- Saisie d'un curseur transmise par le client (position normalisée si arrêté ; un
+-- curseur non arrêté — pas de clic — est traité comme hors zone).
+export type QteCursorInput = {
+	stopped: boolean,
+	position: number?,
+}
+
+-- Charge utile client -> serveur d'un QTE offensif. Le serveur recalcule le verdict
+-- à partir des positions (il ne fait jamais confiance à un verdict envoyé par le client).
+export type OffensiveQtePayload = {
+	action: string,
+	cursors: { QteCursorInput },
+}
+
+-- Résultat calculé d'un QTE offensif (logique partagée : identique client et serveur).
+export type OffensiveQteResult = {
+	zones: { QteZone },
+	outcome: AttackOutcome,
+	multiplier: number,
+	cancelled: boolean,
+}
+
 -- Lot 02 — Moteur de combat et tours.
 -- États possibles de la machine à états d'une session de combat (serveur autoritaire).
 export type CombatState =

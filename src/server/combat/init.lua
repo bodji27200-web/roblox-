@@ -79,6 +79,18 @@ function CombatService.init()
 		end)
 	end
 
+	-- Lot 05 — Route le résultat d'un QTE offensif vers la session du joueur. Le serveur
+	-- recalcule le verdict (validation raisonnable) avant d'appliquer les conséquences.
+	local qteRemote = Remotes.get("PlayerOffensiveQte")
+	if qteRemote:IsA("RemoteEvent") then
+		qteRemote.OnServerEvent:Connect(function(player: Player, payload: any)
+			local session = sessionsByPlayer[player]
+			if session then
+				session:submitOffensiveQte(player, payload)
+			end
+		end)
+	end
+
 	-- Filet de sécurité : si une session n'a pas déjà géré le départ du joueur,
 	-- on s'assure que sa référence est libérée.
 	Players.PlayerRemoving:Connect(function(player: Player)
