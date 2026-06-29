@@ -1,0 +1,162 @@
+--!strict
+-- CombatUI (contrôleur de l'interface de combat)
+-- Lot 03 — Assemble les composants (HUD, menu d'actions, ordre des tours, zone
+-- centrale), les abonne à l'état d'affichage et branche cet état sur le serveur.
+--
+-- Sources de données :
+--   * « CombatStateChanged » (lot 02) : phase de combat + numéro de manche. Pilote
+--     l'activation des boutons, l'ordre des tours et les messages.
+--   * Nom du joueur local : pour le nom affiché dans le HUD.
+--   * `CombatUI:simulate(...)` : API de test manuel pour injecter PV/Essence/etc.
+--     (les valeurs réelles seront branchées quand le serveur les exposera).
+--
+-- Le serveur reste autoritaire : le menu envoie l'action via « PlayerCombatAction »,
+-- l'UI n'applique jamais d'effet de jeu elle-même.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Config = require(Shared:WaitForChild("Config"))
+local Remotes = require(Shared:WaitForChild("Remotes"))
+
+local CombatUIState = require(script:WaitForChild("CombatUIState"))
+local HUD = require(script:WaitForChild("HUD"))
+local ActionMenu = require(script:WaitForChild("ActionMenu"))
+local TurnOrder = require(script:WaitForChild("TurnOrder"))
+local CenterZone = require(script:WaitForChild("CenterZone"))
+
+local UI = Config.UI
+
+-- Libellés français des phases de combat (messages de la zone centrale).
+local STATE_MESSAGES: { [string]: string } = {
+	Starting = "Le combat commence !",
+	ChoosingAction = "À vous de jouer : choisissez une action.",
+	ResolvingAction = "Résolution de l'action…",
+	Defending = "Vous vous mettez en Garde.",
+	RoundEnd = "Fin de la manche.",
+	Victory = "Victoire !",
+	Defeat = "Défaite…",
+	Escaped = "Vous avez fui le combat.",
+}
+
+local CombatUI = {}
+CombatUI.__index = CombatUI
+
+local function localName(): string
+	local player = Players.LocalPlayer
+	return (player and (player.DisplayName ~= "" and player.DisplayName or player.Name)) or "Joueur"
+end
+
+function CombatUI.new()
+	local self = setmetatable({}, CombatUI)
+
+	self.state = CombatUIState.new()
+
+	-- ScreenGui racine : occupe tout l'écran, survit aux réapparitions.
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "CombatUI"
+	gui.ResetOnSpawn = false
+	gui.IgnoreGuiInset = true
+	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	gui.Enabled = true
+	self.gui = gui
+
+	-- Composants.
+	self.hud = HUD.new(gui)
+	self.turnOrder = TurnOrder.new(gui)
+	self.centerZone = CenterZone.new(gui)
+	self.actionMenu = ActionMenu.new(gui, function(actionId: string)
+		self:_onActionChosen(actionId)
+	end)
+
+	-- Abonnements : chaque composant se redessine quand l'état change.
+	self.state:subscribe(function(data)
+		self.hud:render(data)
+		self.turnOrder:render(data)
+		self.centerZone:render(data)
+		self.actionMenu:setEnabled(data.canAct)
+	end)
+
+	-- Nom du personnage (donnée réellement disponible côté client).
+	self.state:applyDisplay({ characterName = localName() })
+
+	return self
+end
+
+-- Construit un ordre des tours d'affichage minimal (joueur + ennemi) à l'entrée en
+-- combat. L'ordre d'initiative réel est calculé côté serveur (lot 02) et n'est pas
+-- répliqué : cet affichage marque le joueur comme actif pendant sa phase de choix.
+function CombatUI:_refreshTurnOrder(combatState: string)
+	if not self.state:get().inCombat then
+		self.state:setTurnOrder({})
+		return
+	end
+	local playerCurrent = combatState == "ChoosingAction"
+	self.state:setTurnOrder({
+		{ name = localName(), side = "Player", isCurrent = playerCurrent },
+		{ name = "Ennemi", side = "Enemy", isCurrent = not playerCurrent },
+	})
+end
+
+-- Réception de l'état serveur (lot 02).
+function CombatUI:_onServerState(payload: { [string]: any })
+	if type(payload) ~= "table" then
+		return
+	end
+	local previous = self.state:get().combatState
+	self.state:applyServerState(payload)
+
+	local newState = self.state:get().combatState
+	if newState ~= previous then
+		local message = STATE_MESSAGES[newState]
+		if message then
+			self.state:pushMessage(message)
+		end
+	end
+	self:_refreshTurnOrder(newState)
+end
+
+-- Le joueur a cliqué/tapé une action : on la transmet au serveur (autoritaire).
+function CombatUI:_onActionChosen(actionId: string)
+	local ok, remote = pcall(function()
+		return Remotes.get("PlayerCombatAction")
+	end)
+	if ok and remote and remote:IsA("RemoteEvent") then
+		remote:FireServer(actionId)
+	end
+	-- Retour visuel local immédiat (le serveur reste seul juge du résultat).
+	self.state:pushMessage(("Action choisie : %s"):format(actionId))
+end
+
+-- Démarre l'UI : parente le ScreenGui et écoute le serveur.
+function CombatUI:start()
+	local player = Players.LocalPlayer
+	if not player then
+		return
+	end
+	local playerGui = player:WaitForChild("PlayerGui")
+	self.gui.Parent = playerGui
+
+	local ok, remote = pcall(function()
+		return Remotes.get("CombatStateChanged")
+	end)
+	if ok and remote and remote:IsA("RemoteEvent") then
+		remote.OnClientEvent:Connect(function(payload)
+			self:_onServerState(payload)
+		end)
+	end
+end
+
+-- API de test manuel (Studio) : injecter des valeurs d'affichage sans serveur.
+-- Exemple : CombatUI:simulate({ hp = 18, maxHp = 30, essence = 4, soulFragments = 2 })
+function CombatUI:simulate(partial: { [string]: any })
+	self.state:applyDisplay(partial)
+end
+
+-- API de test manuel : forcer une phase de combat (active/désactive les boutons).
+function CombatUI:simulateState(combatState: string, round: number?)
+	self:_onServerState({ state = combatState, round = round or self.state:get().round })
+end
+
+return CombatUI
