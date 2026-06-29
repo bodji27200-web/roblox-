@@ -1,5 +1,10 @@
 # Décisions de conception du jeu
 
+> Ce document rassemble les décisions de game design **validées**. Les idées
+> réservées sont marquées « — plus tard » ou regroupées en fin de document.
+> Les valeurs marquées « (provisoire) » sont destinées au prototype et seront
+> rééquilibrées.
+
 ## Vision générale
 
 - Jeu Roblox développé en Luau.
@@ -9,6 +14,15 @@
 - Le jeu doit rester entièrement viable en solo et en duo, tout en fonctionnant aussi à trois ou quatre joueurs.
 - Le PvP sera ajouté beaucoup plus tard comme fonctionnalité secondaire.
 - Le jeu ne doit pas devenir une copie de Deepwoken ; l'inspiration du combat vient du plaisir ressenti dans Arcane Lineage, sans copier ses systèmes.
+
+## Prototype initial
+
+- Le premier domaine développé est l'**Épéiste**.
+- Le premier prototype est **solo**, mais le code doit être organisé pour accueillir le multijoueur plus tard.
+- L'interface est fonctionnelle et placée comme l'interface future, sans rechercher une qualité visuelle définitive.
+- Les premières créatures de test sont le **Loup gris** et le **Bandit égaré**.
+- Le système d'âme est seulement **simulé** dans le prototype.
+- Aucun DataStore et aucune suppression réelle de personnage pendant les tests ; un bouton développeur permet de restaurer les fragments d'âme.
 
 ## Monde
 
@@ -30,7 +44,7 @@
 
 ## Exploration et rencontres
 
-- Le joueur explore librement la forêt ; les ennemis ordinaires ne sont pas forcément visibles.
+- Le joueur explore librement la forêt ; les ennemis ordinaires ne sont pas forcément visibles avant le déclenchement.
 - Hors des limites du village, une rencontre peut se déclencher et lancer un combat, en moyenne toutes les 45 à 90 secondes, avec une période de sécurité après chaque combat.
 - Première région : un joueur niveau 1 rencontre surtout des ennemis niveau 1 ; les niveau 2 sont plus rares et déjà dangereux.
 - À partir de la deuxième région, les niveaux rencontrés peuvent être beaucoup plus variés.
@@ -40,25 +54,26 @@
 
 ## Combat dans le monde
 
-- Le combat se déroule directement à l'endroit où se trouve le joueur, sans téléportation vers une arène séparée.
-- Les autres joueurs proches peuvent voir le combat.
-- Une zone de combat temporaire empêche les joueurs extérieurs d'intervenir ; ceux qui ne participent pas peuvent seulement observer.
+- Le combat se déroule directement à l'endroit où la rencontre se déclenche, sans téléportation vers une arène séparée.
+- Une zone de combat temporaire est créée localement.
+- Les autres joueurs proches peuvent observer ; les joueurs extérieurs au combat ne peuvent jamais intervenir.
+- Le déplacement libre des participants est bloqué pendant le combat.
 
 ## Groupes
 
 - Un groupe peut contenir jusqu'à 4 joueurs.
-- Le jeu reste pensé pour rester viable en solo et en duo ; les rencontres doivent aussi fonctionner à trois ou quatre.
+- Le jeu reste pensé pour être pleinement viable en solo et en duo ; les rencontres peuvent aussi être adaptées aux groupes de trois ou quatre.
 - Le groupe dispose d'un petit onglet dédié, probablement à gauche de l'écran.
 
-### Phase de rassemblement
+### Invitation et phase de rassemblement
 
-- Quand un combat se déclenche, seuls les membres du groupe suffisamment proches et éligibles reçoivent automatiquement une invitation.
+- Quand un combat se déclenche, seuls les membres du groupe proches et éligibles reçoivent automatiquement une invitation.
 - La phase de rassemblement dure au maximum 10 secondes.
-- Accepter téléporte le joueur vers un emplacement sécurisé à gauche ou à droite de celui qui a déclenché le combat.
+- Accepter téléporte le joueur vers un emplacement de combat sécurisé, à gauche ou à droite de celui qui a déclenché le combat.
 - Refuser, ou ne pas répondre avant la fin du délai, empêche définitivement de rejoindre ce combat.
 - Si aucun membre n'est éligible, ou si tous les membres éligibles répondent avant la fin du délai, le combat commence immédiatement.
-- Un joueur trop éloigné, dans une autre région, déjà en combat, mort ou en transition ne reçoit pas l'invitation.
-- Les joueurs qui n'ont pas rejoint peuvent observer le combat, mais pas intervenir.
+- Un joueur trop éloigné, dans une autre région, déjà en combat, mort ou en transition n'est pas éligible et ne reçoit pas l'invitation.
+- Les joueurs qui n'ont pas rejoint peuvent observer le combat, mais jamais intervenir.
 
 ### Génération des rencontres en groupe
 
@@ -71,8 +86,9 @@
 ## Bestiaire
 
 - Une créature est enregistrée après avoir été rencontrée.
-- Les informations se complètent par l'observation, les combats, les victoires et l'étude.
-- Certaines créatures peuvent devenir des invocations permanentes.
+- Les informations se complètent progressivement par l'observation, les combats, les victoires et l'étude (habitat, résistances, objets associés, etc.).
+- Aucune fiche n'est remplie automatiquement dès le premier regard.
+- Certaines créatures peuvent devenir des invocations permanentes (lien futur avec l'Invocateur).
 
 ## Domaines et hybridation
 
@@ -96,50 +112,92 @@
 
 ## Structure du combat
 
-Menu principal à droite : Attaque, Objet, Garde, Méditer, S'échapper. La règle exacte de fuite reste à définir.
+Menu principal à droite : Attaque, Objet, Garde, Méditer, S'échapper.
 
-### Ordre des tours et QTE
+### Manches et Clairvoyance
 
-- L'ordre des tours est déterminé principalement par la statistique Clairvoyance.
-- Une attaque simple utilise normalement un seul QTE ; certaines compétences spéciales, attaques multiples ou techniques de boss peuvent utiliser une courte séquence de QTE.
-- Chaque attaque ennemie est défendue séparément.
-- Le QTE ne devient pas automatiquement plus difficile parce que plusieurs ennemis ont ciblé le même joueur pendant la manche : toute difficulté supplémentaire doit provenir d'une compétence, d'un effet ou d'une attaque coordonnée précise.
+- Chaque combattant vivant agit une fois par manche.
+- L'ordre d'initiative est recalculé au début de chaque manche.
+- La **Clairvoyance** est le facteur principal de l'initiative.
+- Les égalités sont départagées de façon contrôlée par le serveur.
+- Le joueur dispose de **20 secondes** pour choisir son action ; après expiration, **Garde** est utilisée automatiquement.
+- Une attaque ennemie n'est jamais annoncée pendant le tour précédent : son nom et son animation ne sont visibles qu'au moment de son exécution.
+- Chaque attaque ennemie possède son propre QTE défensif ; une nouvelle attaque ne devient pas automatiquement plus difficile simplement parce que le joueur a déjà été ciblé pendant la manche. Toute difficulté supplémentaire doit provenir d'une compétence, d'un effet ou d'une attaque coordonnée précise.
 
 ## Essence
 
-- Ressource pour lancer les compétences ; maximum 6, affichée en bas à gauche (six segments bleus, texte comme 2/6).
-- Récupération automatique de 1 Essence par tour ; l'attaque de base en donne 1 de plus.
-- Méditer donne 2 Essence, fait passer le tour et applique pendant un tour un malus de 40 % de défense.
-- Même après avoir médité, le joueur peut utiliser le QTE défensif contre les attaques ennemies.
-- Une parade parfaite ne donne aucune Essence.
+- Ressource pour lancer les compétences ; maximum **6**, jamais dépassé.
+- Au début du combat : **0**.
+- Affichée en bas à gauche (six segments bleus, texte comme 2/6).
+- Gain naturel : **+1 Essence au début de chaque tour personnel**.
+- Attaque de base réussie ou normale : **+1 Essence** supplémentaire ; une attaque de base entièrement annulée par un échec de QTE ne donne pas cette Essence.
+- Méditer : **+2 Essence**.
+- Une parade parfaite, une riposte ou une contre-parade ne donne aucune Essence.
+
+## Cooldowns
+
+- Les cooldowns sont comptés selon les **tours personnels** de l'utilisateur de la compétence.
+- Les tours des alliés et des ennemis ne réduisent pas les cooldowns.
+- Une compétence avec deux tours de recharge reste indisponible pendant les deux prochains tours personnels et revient au troisième.
 
 ## Attaque et compétences
 
 - Cliquer sur Attaque ouvre la liste des compétences équipées.
 - Chaque compétence affiche : nom, icône, coût en Essence, temps de recharge (sablier) et durée d'effet (chronomètre) si nécessaire.
+- Une compétence trop chère ne peut pas être utilisée (validation serveur).
 - Après sélection, elle lance son animation et éventuellement son QTE.
-- Les QTE propres à chaque domaine et le nombre de compétences équipées restent ouverts.
+- Le nombre de compétences équipées reste ouvert.
 
-## Défense universelle
+## QTE offensif
 
-Quand un ennemi attaque, un QTE défensif apparaît : un curseur se déplace sur une longue barre, sa vitesse dépendant notamment du niveau de maîtrise de l'attaquant. Une zone rouge représente la défense normale, une petite zone jaune la parade parfaite.
+- Barre horizontale avec une zone rouge et une zone jaune plus petite.
+- Plusieurs curseurs se succèdent de gauche à droite avec un petit espacement ; le joueur clique pour arrêter chaque curseur.
+- Chaque curseur arrêté reste visible (marqueur figé) à sa position jusqu'au résultat final.
+- Le nombre de curseurs dépend de la compétence.
+- Résultats :
+  - tous les curseurs en zone jaune : **attaque parfaite**, bonus provisoire de **+20 % de dégâts** ;
+  - aucun curseur hors zone et au maximum un curseur rouge : **attaque normale** ;
+  - deux curseurs rouges ou plus : **attaque annulée** ;
+  - un seul curseur complètement hors de la zone rouge : **attaque annulée immédiatement**.
+- En cas d'annulation, les ressources et le tour restent consommés ; jouer une courte animation de déséquilibre ou d'échec.
+- Les vitesses, espacements et tailles de zones doivent être configurables (profils par compétence).
 
-### Zone rouge
+## Défense universelle (QTE défensif)
 
-- Réduit les dégâts reçus de 50 % ; l'attaque touche réellement, donc les effets secondaires peuvent s'appliquer.
+Quand un ennemi attaque, un QTE défensif apparaît : **un seul curseur** traverse une longue barre, sa vitesse dépendant notamment du niveau de maîtrise de l'attaquant.
 
-### Zone jaune : parade parfaite
-
-- Le personnage dévie complètement l'attaque, ne subit aucun dégât et aucun effet secondaire.
-- La parade parfaite permet une riposte : l'adversaire reçoit un second QTE spécial, beaucoup plus difficile. S'il le réussit, il annule la riposte ; sinon, il la subit.
-- Une contre-parade réussie termine l'échange et ne peut jamais déclencher une nouvelle riposte.
-- Aucun gain d'Essence ; les dégâts et effets de la riposte seront équilibrés plus tard.
+- **Zone rouge** : défense normale, **50 % des dégâts absorbés**. L'attaque touche le corps : les effets secondaires peuvent s'appliquer.
+- **Zone jaune** : parade parfaite, aucun dégât et aucun effet secondaire.
+- **Hors zone** : dégâts complets et effets secondaires applicables.
+- Les dégâts partiels restent des nombres entiers ; pour le prototype, arrondir les dégâts restants **vers le haut**.
+- Une attaque non totalement annulée inflige au minimum **1 dégât**.
 
 ## Action Garde
 
-- Garde fait passer le tour ; le joueur n'utilise pas le QTE défensif.
-- Le personnage absorbe automatiquement 70 % des dégâts reçus.
-- Les règles sur les effets secondaires pendant Garde restent à tester.
+- Garde utilise tout le tour ; aucun QTE défensif pendant l'effet.
+- Absorbe automatiquement **70 % des dégâts**.
+- Les effets secondaires peuvent s'appliquer puisque le corps est touché.
+- Dure jusqu'au prochain tour personnel.
+
+## Méditer
+
+- Utilise tout le tour ; donne **+2 Essence**.
+- Le personnage conserve ses QTE défensifs.
+- Applique un malus jusqu'au prochain tour personnel. Pendant ce malus :
+  - la zone rouge n'absorbe plus que **30 %** des dégâts ;
+  - Garde n'absorbe plus que **50 %** ;
+  - la parade parfaite (jaune) reste inchangée.
+
+## Parade parfaite, riposte et contre-parade
+
+- Une parade parfaite peut déclencher une riposte si le défenseur en possède la capacité.
+- La riposte utilise les dégâts de l'attaque de base (pour le prototype).
+- L'attaquant reçoit un QTE spécial beaucoup plus difficile :
+  - réussite : la riposte est complètement annulée ;
+  - échec : la riposte inflige ses dégâts.
+- Une contre-parade réussie termine l'échange et ne déclenche jamais une nouvelle riposte : il ne doit jamais exister de boucle infinie de ripostes.
+- Aucun gain d'Essence dans cette séquence.
+- Ennemis et joueurs suivent les mêmes principes lorsque leur anatomie et leurs capacités le permettent.
 
 ## Phase des invocations
 
@@ -158,37 +216,66 @@ Quand un ennemi attaque, un QTE défensif apparaît : un curseur se déplace sur
 ### Invocation K.-O.
 
 - Une invocation à 0 PV passe K.-O. et reste hors d'action.
-- L'Invocateur dispose d'une action universelle pour la relever : elle coûte 2 Essence et consomme le tour entier.
-- L'invocation revient avec 25 % de ses PV maximum.
+- L'Invocateur dispose d'une action universelle pour la relever : elle coûte **2 Essence** et consomme le tour entier.
+- L'invocation revient avec **25 % de ses PV maximum**.
 - Une même invocation ne peut être relevée qu'une seule fois par combat ; si elle retombe K.-O., elle reste indisponible jusqu'à un soin adapté ou au retour au village.
 - Les invocations ne meurent jamais définitivement.
 
 ## Joueur K.-O. et Secourir
 
 - Un joueur à 0 PV passe K.-O.
-- Un allié vivant peut utiliser l'action universelle Secourir : elle coûte 2 Essence et consomme tout son tour.
-- Le joueur revient avec 15 % de ses PV maximum et attend son prochain tour normal avant d'agir.
-- Chaque joueur ne peut être relevé qu'une seule fois par combat ; s'il retombe à 0 PV pendant le même combat, il reste définitivement hors combat jusqu'à la fin.
-- En solo, atteindre 0 PV provoque directement la défaite.
-- Un simple K.-O. relevé ne détruit pas un fragment d'âme.
+- En solo, atteindre 0 PV provoque immédiatement la défaite.
+- En groupe, un allié vivant peut utiliser l'action universelle **Secourir** : elle coûte **2 Essence** et consomme tout son tour.
+- Le joueur revient avec **15 % de ses PV maximum** et attend son prochain tour normal avant d'agir.
+- Chaque joueur ne peut être relevé qu'une seule fois par combat ; s'il retombe à 0 PV pendant le même combat, il reste hors combat jusqu'à la fin.
+- Un simple K.-O. relevé ne détruit aucun fragment d'âme.
 
 ## Système d'âme
 
-- L'interface en bas à gauche affiche une icône d'âme divisée en trois fragments.
-- Le personnage possède trois morts véritables possibles : une défaite confirmée détruit un fragment d'âme.
-- Un K.-O. relevé pendant un combat n'est pas une mort véritable.
-- Lorsque le troisième et dernier fragment disparaît, le personnage est supprimé définitivement : maîtrise des domaines, équipement, inventaire et progression personnelle sont perdus.
+- L'interface en bas à gauche affiche une icône d'âme divisée en **trois fragments**.
+- Le personnage possède trois morts véritables possibles : une **défaite solo ou une défaite totale du groupe** détruit un fragment.
+- Un K.-O. relevé pendant un combat n'est pas une mort véritable et ne détruit aucun fragment.
+- Lorsque le troisième et dernier fragment disparaît, le personnage est supprimé définitivement (dans la version finale).
+- Dans le prototype, cette destruction est **uniquement simulée** : aucun DataStore, aucune vraie suppression, et un bouton développeur permet de restaurer les fragments.
 - Aucun mémorial des personnages morts ne doit être créé.
 - À détailler plus tard : règles précises distinguant une défaite normale d'une mort véritable ; protection technique contre les morts causées par un bug serveur ou une déconnexion involontaire.
+
+## Conséquences des défaites
+
+### Deux premières défaites
+
+- Retour au village.
+- Perte de l'or transporté et du butin obtenu pendant l'expédition.
+- Équipement conservé.
+- L'or déjà sécurisé à la Banque reste conservé.
+
+### Mort définitive
+
+- Perte du personnage : domaines et niveaux de maîtrise, équipement, inventaire et progression personnelle.
+- Perte du contenu de la Banque classique.
+- Seul un objet stocké dans la Banque d'âme peut survivre.
 
 ## Objets
 
 - Le menu Objet donne accès aux consommables disponibles.
-- Maximum deux potions par combat ; les règles des autres objets seront définies plus tard.
+- Deux potions au début de chaque combat (prototype) ; deux potions maximum par combat.
+- Une potion soigne **7 PV** sans dépasser le maximum et consomme le tour.
+- Aucun autre objet nécessaire dans le premier prototype ; les règles des autres objets seront définies plus tard.
+
+## Fuite
+
+- Consomme le tour ; peut être retentée dès le prochain tour personnel après un échec.
+- Impossible contre un boss.
+- Réussite : combat terminé sans récompense.
+- Chance (provisoire) :
+  - base de **50 %** ;
+  - **±10 points** par point de différence de Clairvoyance, comparé au combattant ennemi vivant possédant la meilleure Clairvoyance ;
+  - résultat limité entre **10 % et 90 %**.
+- Exemples : Clairvoyance 5 contre Bandit 5 = 50 % ; Clairvoyance 5 contre Loup 7 = 30 %.
 
 ## Interface permanente
 
-En bas à gauche : nom du personnage, niveau de maîtrise le plus élevé (max 12), barre verte de points de vie, Essence actuelle sur 6, or, cristaux bleus, icône d'âme (trois fragments).
+En bas à gauche : nom du personnage, niveau de maîtrise le plus élevé (max 12), barre verte et valeur de points de vie, Essence actuelle sur 6, or, cristaux bleus, icône d'âme (trois fragments).
 
 ### Cristaux bleus
 
@@ -198,17 +285,17 @@ En bas à gauche : nom du personnage, niveau de maîtrise le plus élevé (max 1
 
 ## Banque
 
-- Le village possède un bâtiment Banque permettant de déposer et retirer son or.
-- L'or conservé sur le personnage n'est pas protégé ; l'or déposé à la Banque est conservé après les premières morts du personnage.
-- La Banque ne peut être utilisée qu'en revenant physiquement au village.
-- Lors de la mort définitive du personnage, le contenu de la Banque classique est également perdu.
+- Bâtiment physique dans le village, utilisable uniquement en revenant au village.
+- Permet de déposer et retirer son or.
+- L'or transporté sur le personnage reste exposé ; l'or déposé survit aux deux premières morts.
+- Le contenu de la Banque classique disparaît à la mort définitive.
 
 ### Banque d'âme — plus tard
 
-- Un accès spécial à la Banque d'âme pourra être débloqué pour un prix très élevé.
-- Elle possède un seul emplacement et permet de conserver durablement un seul objet après la mort définitive ; le personnage suivant peut le récupérer.
+- Déblocage très coûteux ; un seul emplacement.
+- Permet de conserver durablement un seul objet après la mort définitive ; le personnage suivant peut le récupérer.
 - Tant que l'objet est stocké, le personnage actuel ne peut pas l'utiliser.
-- Le prix exact, les objets autorisés et les conditions de remplacement restent à définir.
+- Prix exact, objets autorisés et conditions de remplacement restent à définir.
 
 ## PvP — plus tard
 
@@ -216,16 +303,48 @@ En bas à gauche : nom du personnage, niveau de maîtrise le plus élevé (max 1
 - Une liste de joueurs pourra être affichée/masquée en haut à droite, indiquant seulement le nom Roblox et le niveau de maîtrise le plus élevé.
 - Cliquer sur un joueur permettra plus tard de l'inviter dans un groupe ou de lui proposer un duel.
 
+## Kit Épéiste niveau 1 (provisoire)
+
+**Statistiques** : PV maximum 30 ; Clairvoyance 5 ; Essence 0/6 au début.
+
+- **Taille** (attaque de base) : coût 0 Essence, 3 dégâts, deux curseurs offensifs, aucun cooldown, donne +1 Essence si l'action n'est pas annulée.
+- **Fente** : coût 2 Essence, 5 dégâts, trois curseurs offensifs, cooldown 2 tours personnels.
+- **Entaille croisée** : coût 3 Essence, deux frappes de 3 dégâts, cooldown 3 tours personnels. Chaque frappe utilise une séquence séparée de deux curseurs et est calculée indépendamment ; l'échec de la deuxième ne supprime pas les dégâts de la première.
+- **Posture du duelliste** : coût 2 Essence, cooldown 4 tours personnels, dure jusqu'au prochain tour personnel, agrandit de 50 % la zone jaune du prochain QTE défensif, aucun dégât.
+
+## Créatures de test (provisoire)
+
+### Loup gris niveau 1
+
+- PV maximum 16 ; Clairvoyance 7 ; rapide et agressif.
+- Ne peut pas effectuer de parade armée ; peut utiliser une esquive adaptée à son anatomie.
+- **Morsure** : 3 dégâts, aucun cooldown, QTE défensif normal.
+- **Bond** : 5 dégâts, cooldown 2 tours personnels, QTE plus rapide que Morsure ; l'IA préfère Bond lorsqu'il est disponible.
+
+### Bandit égaré niveau 1
+
+- PV maximum 22 ; Clairvoyance 5 ; peut défendre, garder, parer parfaitement, riposter et contre-parer.
+- **Coup d'épée** : 4 dégâts, aucun cooldown.
+- **Frappe lourde** : 7 dégâts, cooldown 3 tours personnels, QTE défensif plus rapide, aucun avertissement avant son tour.
+- **Garde** : même principe que la Garde du joueur (70 % d'absorption).
+
+## Défense contrôlée par l'IA
+
+- Ne pas utiliser un pourcentage global arbitraire identique pour tous : créer des profils de défense configurables.
+- Le calcul doit considérer : le niveau ou score de maîtrise ; le type de créature ; les défenses anatomiquement autorisées ; l'état actuel ; la difficulté de l'attaque reçue ; une variation aléatoire contrôlée.
+- Toutes les constantes restent dans des modules de configuration.
+- Le Loup utilise esquive ou défense naturelle ; le Bandit utilise blocage, parade parfaite, riposte et contre-parade.
+
 ## Points encore ouverts
 
-- Effets précis des statistiques de départ.
+- Effets précis des statistiques de départ (autres que Clairvoyance et PV du prototype).
 - Nombre de compétences équipables selon la maîtrise.
-- QTE propres à chaque domaine.
-- Règles exactes de fuite.
-- Dégâts et effets de la riposte.
+- QTE propres à chaque domaine (au-delà de l'Épéiste).
+- Règles finales d'équilibrage de la fuite, des cristaux et des récompenses.
+- Dégâts et effets définitifs de la riposte.
 - Fonctionnement détaillé des bâtiments.
 - Progression exacte entre les niveaux 1 et 12.
-- Liste des créatures de la première région.
+- Liste complète des créatures de la première région.
 - Règles finales des effets secondaires pendant l'action Garde.
 - Règles distinguant une défaite normale d'une mort véritable, et protection contre les morts par bug ou déconnexion.
 - Lien bestial / état Enragé pour l'Invocateur.
