@@ -171,6 +171,11 @@ export type ActionAvailability = {
 -- Lot 04 — Instantané des ressources du joueur, répliqué côté client (affichage seul).
 export type CombatResources = {
 	sessionId: string,
+	-- Lot 06 (correctif) — PV courants/max du joueur, répliqués depuis le serveur autoritaire.
+	-- Permettent au HUD de refléter immédiatement les dégâts subis (après applyIncomingDamage)
+	-- sans attendre un changement de tour.
+	hp: number,
+	maxHp: number,
 	essence: number,
 	essenceMax: number,
 	-- Horodatage serveur synchronisé de la fin du tour (chronomètre), ou nil hors tour.

@@ -193,6 +193,15 @@ end
 -- affichés (l'API de simulation reste réservée aux tests manuels Studio).
 function CombatUIState.applyResources(self: State, payload: { [string]: any })
 	local data = self._data
+	-- Lot 06 (correctif) — PV répliqués par le serveur autoritaire. Lus puis bornés ci-dessous,
+	-- ils permettent au HUD de refléter immédiatement les dégâts subis (le `_notify` final
+	-- redessine le HUD sans attendre un changement de tour).
+	if type(payload.maxHp) == "number" then
+		data.maxHp = payload.maxHp
+	end
+	if type(payload.hp) == "number" then
+		data.hp = payload.hp
+	end
 	if type(payload.essence) == "number" then
 		data.essence = payload.essence
 	end
@@ -218,6 +227,13 @@ function CombatUIState.applyResources(self: State, payload: { [string]: any })
 	-- Bornage défensif identique à applyDisplay (cohérence d'affichage).
 	data.essenceMax = math.max(1, data.essenceMax)
 	data.essence = math.clamp(data.essence, 0, data.essenceMax)
+	-- PV : maxHp >= 0 ; hp borné dans [0, maxHp] (ou 0 si maxHp nul) — jamais de barre incohérente.
+	data.maxHp = math.max(0, data.maxHp)
+	if data.maxHp > 0 then
+		data.hp = math.clamp(data.hp, 0, data.maxHp)
+	else
+		data.hp = 0
+	end
 	self:_notify()
 end
 
