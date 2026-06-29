@@ -11,6 +11,11 @@ local RunService = game:GetService("RunService")
 -- Noms réservés (vides pour l'instant). Catalogue volontairement minimal.
 local EVENTS: { string } = {
 	"CombatTriggered", -- un déclencheur (Loup/Bandit) a été activé
+	-- Lot 02 — hooks réseau neutres pour le moteur de combat.
+	-- Serveur -> client : notifie l'état courant de la session (UI branchée au lot 03).
+	"CombatStateChanged",
+	-- Client -> serveur : le joueur soumet son action de tour (validée serveur).
+	"PlayerCombatAction",
 }
 
 local FUNCTIONS: { string } = {

@@ -13,6 +13,12 @@ local CombatConfig = {
 	-- Les égalités sont départagées côté serveur (placeholder, lots suivants).
 	INITIATIVE_STAT = "Clairvoyance",
 
+	-- Action appliquée automatiquement quand le timer du joueur expire.
+	AUTO_TIMEOUT_ACTION = "Garde",
+
+	-- Action neutre par défaut d'un ennemi tant qu'aucune IA n'est branchée (lot 08).
+	ENEMY_DEFAULT_ACTION = "Attendre",
+
 	-- Absorptions de défense (proportion des dégâts absorbés).
 	DEFENSE = {
 		RED_ZONE_ABSORB = 0.50, -- défense normale (zone rouge)

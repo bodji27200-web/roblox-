@@ -41,6 +41,40 @@ export type DefenseOutcome = "PerfectParry" | "Normal" | "Miss"
 -- Résultat possible d'un QTE offensif.
 export type AttackOutcome = "Perfect" | "Normal" | "Cancelled"
 
+-- Lot 02 — Moteur de combat et tours.
+-- États possibles de la machine à états d'une session de combat (serveur autoritaire).
+export type CombatState =
+	"Idle"
+	| "Starting"
+	| "ChoosingAction"
+	| "ResolvingAction"
+	| "Defending"
+	| "RoundEnd"
+	| "Victory"
+	| "Defeat"
+	| "Escaped"
+	| "Cleanup"
+
+-- Issue terminale d'un combat (sous-ensemble des états terminaux non-Cleanup).
+export type CombatResult = "Victory" | "Defeat" | "Escaped"
+
+-- Un combattant tel que suivi par le moteur de combat côté serveur.
+-- (Étend le Combatant statique avec l'état runtime nécessaire au moteur de tours.)
+export type CombatParticipant = {
+	id: string,
+	displayName: string,
+	side: Side,
+	clairvoyance: number,
+	maxHp: number,
+	hp: number,
+	-- Référence joueur (côté "Player") ou modèle d'ennemi (côté "Enemy").
+	player: Player?,
+	model: Instance?,
+	-- État de manche : Garde active et verrou anti double-action.
+	isGuarding: boolean,
+	hasActedThisRound: boolean,
+}
+
 -- Type vide retourné par ce module : seuls les types exportés ci-dessus sont utilisés.
 local Types = {}
 

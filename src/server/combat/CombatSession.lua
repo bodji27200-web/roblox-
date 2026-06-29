@@ -1,0 +1,482 @@
+--!strict
+-- CombatSession
+-- Lot 02 — Une session de combat serveur autoritaire, au tour par tour.
+-- Responsabilités :
+--   * porter l'état d'une rencontre (participants, manche courante, machine à états) ;
+--   * verrouiller le déplacement, faire apparaître l'ennemi et une zone temporaire ;
+--   * dérouler les manches : initiative recalculée, un tour par combattant vivant ;
+--   * timer de 20 s côté joueur avec Garde automatique à expiration ;
+--   * empêcher toute double action dans une manche ;
+--   * atteindre un état terminal (Victory/Defeat/Escaped) puis Cleanup fiable.
+-- Le serveur fait autorité : aucune action n'est validée sur la seule foi du client.
+-- Pas de dégâts ni de kit ici (lots 04+/07/08) : les actions de tour sont neutres.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Config = require(Shared:WaitForChild("Config"))
+local Remotes = require(Shared:WaitForChild("Remotes"))
+local Types = require(Shared:WaitForChild("Types"))
+
+local CombatState = require(script.Parent:WaitForChild("CombatState"))
+local Initiative = require(script.Parent:WaitForChild("Initiative"))
+
+local States = CombatState.States
+
+type CombatParticipant = Types.CombatParticipant
+
+local TURN_SECONDS = Config.Combat.TURN_CHOICE_SECONDS
+local AUTO_TIMEOUT_ACTION = Config.Combat.AUTO_TIMEOUT_ACTION
+local ENEMY_DEFAULT_ACTION = Config.Combat.ENEMY_DEFAULT_ACTION
+local GUARD_ACTION = AUTO_TIMEOUT_ACTION -- la Garde est l'action défensive par défaut.
+local ESCAPE_ACTION = "Fuite"
+
+local CombatSession = {}
+CombatSession.__index = CombatSession
+
+local nextSessionId = 0
+
+-- ---------------------------------------------------------------------------
+-- Construction
+-- ---------------------------------------------------------------------------
+
+-- service : le gestionnaire (CombatService) notifié à la fin de la session.
+-- player  : le joueur engagé dans le combat (prototype solo).
+-- creatureKey : clé de Config.Creatures (« Loup » / « Bandit »).
+function CombatSession.new(service: any, player: Player, creatureKey: string)
+	nextSessionId += 1
+
+	local self = setmetatable({}, CombatSession)
+	self.id = "combat-" .. tostring(nextSessionId)
+	self.service = service
+	self.player = player
+	self.creatureKey = creatureKey
+	self.round = 0
+	self._active = true
+	self._cleaned = false
+	-- Fonction de résolution du tour joueur en attente (nil si aucun tour en attente).
+	self._resolveTurn = nil :: ((action: string) -> ())?
+	-- Suivi pour le nettoyage fiable.
+	self._connections = {} :: { RBXScriptConnection }
+	self._instances = {} :: { Instance }
+	self._movementRestore = {} :: { { humanoid: Humanoid, walkSpeed: number, jumpHeight: number, jumpPower: number } }
+
+	self.state = CombatState.new(function(from: string, to: string)
+		print(("[CombatSession %s] %s -> %s (manche %d)"):format(self.id, from, to, self.round))
+	end)
+
+	self.participants = self:_buildParticipants(player, creatureKey)
+
+	return self
+end
+
+-- Construit les combattants : le joueur et l'ennemi décrit en configuration.
+function CombatSession:_buildParticipants(player: Player, creatureKey: string): { CombatParticipant }
+	local creature = Config.Creatures[creatureKey]
+
+	local playerParticipant: CombatParticipant = {
+		id = "player-" .. tostring(player.UserId),
+		displayName = player.DisplayName,
+		side = "Player",
+		-- La Clairvoyance détaillée du joueur arrivera avec le kit (lot 07) ;
+		-- valeur neutre de prototype pour le moteur de tours.
+		clairvoyance = 6,
+		maxHp = 30,
+		hp = 30,
+		player = player,
+		model = nil,
+		isGuarding = false,
+		hasActedThisRound = false,
+	}
+
+	local enemyParticipant: CombatParticipant = {
+		id = "enemy-" .. creatureKey,
+		displayName = (creature and creature.displayName) or creatureKey,
+		side = "Enemy",
+		clairvoyance = (creature and creature.clairvoyance) or 5,
+		maxHp = (creature and creature.maxHp) or 10,
+		hp = (creature and creature.maxHp) or 10,
+		player = nil,
+		model = nil,
+		isGuarding = false,
+		hasActedThisRound = false,
+	}
+
+	return { playerParticipant, enemyParticipant }
+end
+
+-- ---------------------------------------------------------------------------
+-- Suivi des ressources (nettoyage)
+-- ---------------------------------------------------------------------------
+
+function CombatSession:_trackConnection(conn: RBXScriptConnection)
+	table.insert(self._connections, conn)
+end
+
+function CombatSession:_trackInstance(inst: Instance)
+	table.insert(self._instances, inst)
+end
+
+-- ---------------------------------------------------------------------------
+-- Cycle de vie
+-- ---------------------------------------------------------------------------
+
+-- Démarre la session : passe Idle -> Starting, prépare la scène, puis lance la
+-- boucle de manches dans une coroutine dédiée.
+function CombatSession:start()
+	self.state:transition(States.Starting)
+
+	-- Surveille la déconnexion du joueur pendant tout le combat.
+	self:_trackConnection(Players.PlayerRemoving:Connect(function(leaving: Player)
+		if leaving == self.player then
+			self:abort("disconnect")
+		end
+	end))
+
+	self:_setupScene()
+	self:_fireState()
+
+	-- La boucle tourne dans sa propre coroutine : le timer de tour peut y céder
+	-- la main sans bloquer le reste du serveur.
+	self._loopThread = task.spawn(function()
+		self:_runRounds()
+	end)
+end
+
+-- Prépare la scène : verrou de déplacement, apparition de l'ennemi, zone temporaire.
+function CombatSession:_setupScene()
+	local character = self.player.Character
+	local rootPart = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+	-- 1) Verrouiller le déplacement du joueur (restauré au Cleanup).
+	if humanoid then
+		table.insert(self._movementRestore, {
+			humanoid = humanoid,
+			walkSpeed = humanoid.WalkSpeed,
+			jumpHeight = humanoid.JumpHeight,
+			jumpPower = humanoid.JumpPower,
+		})
+		humanoid.WalkSpeed = 0
+		humanoid.JumpHeight = 0
+		humanoid.JumpPower = 0
+	end
+
+	-- Point d'ancrage de la rencontre : devant le joueur si possible, sinon origine.
+	local anchorCFrame = rootPart and (rootPart.CFrame * CFrame.new(0, 0, -8)) or CFrame.new(0, 4, 0)
+
+	-- 2) Zone de combat temporaire (repère visuel, non collidable).
+	local arena = Instance.new("Part")
+	arena.Name = "CombatArena_" .. self.id
+	arena.Anchored = true
+	arena.CanCollide = false
+	arena.CanQuery = false
+	arena.Size = Vector3.new(24, 1, 24)
+	arena.CFrame = CFrame.new(anchorCFrame.Position - Vector3.new(0, 3, 0))
+	arena.Transparency = 0.6
+	arena.Color = Color3.fromRGB(40, 60, 90)
+	arena.Material = Enum.Material.ForceField
+	arena.Parent = workspace
+	self:_trackInstance(arena)
+
+	-- 3) Apparition de l'ennemi devant le joueur (placeholder, pas d'asset).
+	local enemyParticipant = self:_enemyParticipant()
+	local enemyModel = Instance.new("Model")
+	enemyModel.Name = "Enemy_" .. self.creatureKey
+
+	local enemyPart = Instance.new("Part")
+	enemyPart.Name = "Body"
+	enemyPart.Anchored = true
+	enemyPart.Size = Vector3.new(3, 5, 3)
+	enemyPart.CFrame = anchorCFrame * CFrame.new(0, 2.5, 0)
+	enemyPart.Color = Color3.fromRGB(150, 70, 70)
+	enemyPart.Material = Enum.Material.SmoothPlastic
+	enemyPart.Parent = enemyModel
+	enemyModel.PrimaryPart = enemyPart
+	enemyModel.Parent = workspace
+
+	if enemyParticipant then
+		enemyParticipant.model = enemyModel
+	end
+	self:_trackInstance(enemyModel)
+end
+
+-- Boucle principale : une manche après l'autre, jusqu'à un état terminal.
+function CombatSession:_runRounds()
+	while self._active do
+		self.round += 1
+
+		-- Début de manche : réinitialise les drapeaux de tour et recalcule l'ordre.
+		for _, p in self.participants do
+			p.hasActedThisRound = false
+			p.isGuarding = false
+		end
+		local order = Initiative.order(self.participants)
+
+		-- Un tour par combattant vivant, dans l'ordre d'initiative.
+		for _, participant in order do
+			if not self._active then
+				break
+			end
+			-- Anti double-action : sécurité même si l'ordre changeait en cours de route.
+			if participant.hasActedThisRound then
+				continue
+			end
+			if not Initiative.isAlive(participant) then
+				continue
+			end
+			self:_takeTurn(participant)
+		end
+
+		if not self._active then
+			break
+		end
+
+		-- Fin de manche : vérifie les conditions de fin.
+		self.state:transition(States.RoundEnd)
+		self:_fireState()
+
+		local ending = self:_checkEndConditions()
+		if ending then
+			self:_finish(ending)
+			break
+		end
+		-- Sinon : on repart pour une nouvelle manche (initiative recalculée au début).
+	end
+end
+
+-- Déroule le tour d'un combattant.
+function CombatSession:_takeTurn(participant: CombatParticipant)
+	-- Verrou anti double-action posé dès l'entrée du tour.
+	participant.hasActedThisRound = true
+
+	if participant.side == "Player" then
+		self.state:transition(States.ChoosingAction)
+		self:_fireState()
+
+		local action = self:_awaitPlayerChoice(participant)
+		if not self._active then
+			return
+		end
+		self:_applyAction(participant, action)
+	else
+		-- Ennemi : aucune IA au lot 02. Action neutre par défaut.
+		self:_applyAction(participant, ENEMY_DEFAULT_ACTION)
+	end
+end
+
+-- Attend le choix du joueur pendant TURN_SECONDS. À expiration : Garde automatique.
+-- Implémenté en cédant la coroutine de boucle, réveillée soit par submitAction,
+-- soit par le délai d'expiration — la première résolution gagne.
+function CombatSession:_awaitPlayerChoice(participant: CombatParticipant): string
+	local thread = coroutine.running()
+	local resolved = false
+	local chosen: string = AUTO_TIMEOUT_ACTION
+
+	local function resolve(action: string)
+		if resolved then
+			return
+		end
+		resolved = true
+		self._resolveTurn = nil
+		chosen = action
+		if coroutine.status(thread) == "suspended" then
+			task.spawn(thread)
+		end
+	end
+
+	-- Exposé au serveur (remote/déconnexion) pour résoudre ce tour précis.
+	self._resolveTurn = resolve
+
+	-- Timer de 20 s : applique la Garde automatiquement si rien n'a été choisi.
+	task.delay(TURN_SECONDS, function()
+		if not resolved and self._active then
+			print(("[CombatSession %s] Timer expiré pour %s : Garde automatique."):format(self.id, participant.displayName))
+			resolve(AUTO_TIMEOUT_ACTION)
+		end
+	end)
+
+	coroutine.yield()
+	return chosen
+end
+
+-- Applique l'action choisie/par défaut d'un combattant (résolution neutre au lot 02).
+function CombatSession:_applyAction(participant: CombatParticipant, action: string)
+	if action == ESCAPE_ACTION and participant.side == "Player" then
+		-- Fuite : on rejoint directement l'état terminal Escaped.
+		self.state:transition(States.Escaped)
+		self:_fireState()
+		self:_finish("Escaped")
+		return
+	end
+
+	if action == GUARD_ACTION then
+		self.state:transition(States.Defending)
+		participant.isGuarding = true
+	else
+		-- Action générique : pas de dégâts ni de kit au lot 02 (résolution neutre).
+		self.state:transition(States.ResolvingAction)
+	end
+	self:_fireState()
+end
+
+-- Conditions de fin basées sur les PV. Au lot 02 aucun dégât n'est infligé : le
+-- combat se termine donc par fuite ou déconnexion. La logique reste branchée pour
+-- les lots suivants (dégâts au lot 04, ennemis au lot 08).
+function CombatSession:_checkEndConditions(): string?
+	local playersAlive, enemiesAlive = false, false
+	for _, p in self.participants do
+		if Initiative.isAlive(p) then
+			if p.side == "Player" then
+				playersAlive = true
+			else
+				enemiesAlive = true
+			end
+		end
+	end
+	if not enemiesAlive then
+		return States.Victory
+	end
+	if not playersAlive then
+		return States.Defeat
+	end
+	return nil
+end
+
+-- Passe à l'état terminal demandé (si nécessaire) puis lance le nettoyage.
+function CombatSession:_finish(result: string)
+	if not self._active then
+		return
+	end
+	if self.state:get() ~= result then
+		self.state:transition(result)
+		self:_fireState()
+	end
+	self._active = false
+	self:_cleanup()
+end
+
+-- Interruption inconditionnelle (déconnexion, arrêt serveur) : Cleanup garanti
+-- depuis n'importe quel état actif, sans passer par un état terminal.
+function CombatSession:abort(reason: string)
+	if self._cleaned then
+		return
+	end
+	print(("[CombatSession %s] Interruption (%s)."):format(self.id, reason))
+	self._active = false
+	-- Débloque la coroutine si elle attendait un choix.
+	if self._resolveTurn then
+		local resolve = self._resolveTurn
+		self._resolveTurn = nil
+		resolve(AUTO_TIMEOUT_ACTION)
+	end
+	self:_cleanup()
+end
+
+-- Nettoyage fiable : restaure le déplacement, déconnecte tout, détruit les instances.
+-- Idempotent : un seul nettoyage effectif quel que soit le chemin de sortie.
+function CombatSession:_cleanup()
+	if self._cleaned then
+		return
+	end
+	self._cleaned = true
+	self._active = false
+	self._resolveTurn = nil
+
+	-- Atteindre Cleanup depuis l'état courant (toujours autorisé pour les états actifs
+	-- et terminaux).
+	local current = self.state:get()
+	if current ~= States.Cleanup and current ~= States.Idle then
+		self.state:transition(States.Cleanup)
+	end
+
+	-- 1) Restaurer le déplacement du joueur.
+	for _, entry in self._movementRestore do
+		local humanoid = entry.humanoid
+		if humanoid and humanoid.Parent then
+			humanoid.WalkSpeed = entry.walkSpeed
+			humanoid.JumpHeight = entry.jumpHeight
+			humanoid.JumpPower = entry.jumpPower
+		end
+	end
+	table.clear(self._movementRestore)
+
+	-- 2) Déconnecter toutes les connexions suivies.
+	for _, conn in self._connections do
+		conn:Disconnect()
+	end
+	table.clear(self._connections)
+
+	-- 3) Détruire toutes les instances créées (ennemi, zone).
+	for _, inst in self._instances do
+		if inst then
+			inst:Destroy()
+		end
+	end
+	table.clear(self._instances)
+
+	-- Retour à l'état de repos.
+	self.state:transition(States.Idle)
+
+	-- Notifier le gestionnaire pour qu'il libère sa référence.
+	if self.service and self.service._onSessionEnded then
+		self.service:_onSessionEnded(self)
+	end
+end
+
+-- ---------------------------------------------------------------------------
+-- Entrées autoritaires (appelées par le serveur / les remotes)
+-- ---------------------------------------------------------------------------
+
+-- Soumission d'action par le joueur. Le serveur valide : bon joueur, bon état,
+-- tour réellement en attente. Toute soumission invalide est ignorée.
+function CombatSession:submitAction(player: Player, action: string): boolean
+	if not self._active then
+		return false
+	end
+	if player ~= self.player then
+		return false
+	end
+	if self.state:get() ~= States.ChoosingAction then
+		return false
+	end
+	if type(action) ~= "string" then
+		return false
+	end
+	local resolve = self._resolveTurn
+	if not resolve then
+		return false
+	end
+	resolve(action)
+	return true
+end
+
+-- ---------------------------------------------------------------------------
+-- Utilitaires
+-- ---------------------------------------------------------------------------
+
+function CombatSession:_enemyParticipant(): CombatParticipant?
+	for _, p in self.participants do
+		if p.side == "Enemy" then
+			return p
+		end
+	end
+	return nil
+end
+
+-- Réplique l'état courant au client (hook neutre pour l'UI du lot 03).
+function CombatSession:_fireState()
+	local ok, remote = pcall(function()
+		return Remotes.get("CombatStateChanged")
+	end)
+	if ok and remote and remote:IsA("RemoteEvent") and self.player and self.player.Parent then
+		remote:FireClient(self.player, {
+			sessionId = self.id,
+			state = self.state:get(),
+			round = self.round,
+		})
+	end
+end
+
+return CombatSession
