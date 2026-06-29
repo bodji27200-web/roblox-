@@ -145,14 +145,32 @@ function CombatSession:_grantEssence(participant: CombatParticipant, amount: num
 	participant.essence = math.clamp(participant.essence + amount, 0, Essence.MAX)
 end
 
--- Début d'un tour personnel : décompte des recharges puis gain de +1 Essence.
--- Appelé pour CHAQUE combattant au début de SON tour : les tours des autres ne
--- réduisent donc jamais ses recharges (décompte en tours personnels uniquement).
+-- Début d'un tour personnel : gain de +1 Essence.
+-- Les recharges ne sont PAS décomptées ici mais à la FIN du tour (voir
+-- _endPersonalTurn), en ignorant l'action armée pendant ce tour. La valeur stockée
+-- reste ainsi le nombre réel de tours restants, ce qui garde l'affichage cohérent.
 function CombatSession:_beginPersonalTurn(participant: CombatParticipant)
 	participant.personalTurns += 1
 
-	-- Décompte des recharges en cours (un tour personnel écoulé).
+	-- +1 Essence au début de chaque tour personnel (plafonné à MAX).
+	self:_grantEssence(participant, Essence.GAIN_PER_PERSONAL_TURN)
+end
+
+-- Fin d'un tour personnel : décompte les recharges en cours (un tour personnel
+-- écoulé), en IGNORANT l'action utilisée ce tour-ci — elle vient d'être armée et ne
+-- doit pas perdre un tour immédiatement. Appelé pour CHAQUE combattant à la fin de
+-- SON tour : les tours des autres ne réduisent jamais ses recharges (décompte en
+-- tours personnels uniquement).
+--
+-- Avec ce schéma, la recharge stocke sa valeur réelle C : utilisée au tour N, l'action
+-- reste indisponible pendant C tours personnels complets (N+1..N+C) et redevient
+-- disponible au tour N+C+1. L'UI affiche exactement C, puis C-1, ... 0 (jamais C+1).
+function CombatSession:_endPersonalTurn(participant: CombatParticipant, usedAction: string?)
 	for actionId, remaining in participant.cooldowns do
+		if actionId == usedAction then
+			-- Recharge armée pendant CE tour : ne pas la décompter tout de suite.
+			continue
+		end
 		local left = remaining - 1
 		if left <= 0 then
 			participant.cooldowns[actionId] = nil
@@ -160,9 +178,6 @@ function CombatSession:_beginPersonalTurn(participant: CombatParticipant)
 			participant.cooldowns[actionId] = left
 		end
 	end
-
-	-- +1 Essence au début de chaque tour personnel (plafonné à MAX).
-	self:_grantEssence(participant, Essence.GAIN_PER_PERSONAL_TURN)
 end
 
 -- Valide qu'une action soumise par le client est utilisable : action connue
@@ -208,14 +223,15 @@ function CombatSession:_applyActionResources(participant: CombatParticipant, act
 	end
 	self:_grantEssence(participant, gain)
 
-	-- 3) Armer la recharge (comptée en tours personnels du combattant).
-	-- La recharge est décomptée au DÉBUT de chacun des tours personnels SUIVANTS
-	-- (l'action est jouée pendant CE tour, dont le début est déjà passé). On arme
-	-- donc à C+1 pour que l'action reste indisponible pendant C tours personnels
-	-- complets (tours N+1..N+C) et redevienne disponible au tour N+C+1.
-	-- Ex. recharge 2 : indisponible aux tours N+1 et N+2, disponible au tour N+3.
+	-- 3) Armer la recharge à sa valeur réelle C (comptée en tours personnels).
+	-- Le décompte se fait à la FIN de chaque tour personnel SUIVANT (voir
+	-- _endPersonalTurn, qui ignore l'action armée ce tour-ci) : l'action reste
+	-- indisponible pendant C tours complets (N+1..N+C) et redevient disponible au
+	-- tour N+C+1. Stocker C (et non C+1) garde un nombre de tours restants cohérent
+	-- à l'affichage. Ex. recharge 2 : indisponible aux tours N+1 et N+2, disponible
+	-- au tour N+3 ; l'UI affiche 2, puis 1, puis 0.
 	if rule.cooldownPersonalTurns > 0 then
-		participant.cooldowns[action] = rule.cooldownPersonalTurns + 1
+		participant.cooldowns[action] = rule.cooldownPersonalTurns
 	end
 end
 
@@ -400,9 +416,11 @@ function CombatSession:_takeTurn(participant: CombatParticipant)
 	-- Verrou anti double-action posé dès l'entrée du tour.
 	participant.hasActedThisRound = true
 
-	-- Lot 04 — Début du tour personnel : décompte des recharges et gain de +1 Essence.
+	-- Lot 04 — Début du tour personnel : gain de +1 Essence (recharges décomptées
+	-- en fin de tour, voir _endPersonalTurn).
 	self:_beginPersonalTurn(participant)
 
+	local usedAction: string?
 	if participant.side == "Player" then
 		self.state:transition(States.ChoosingAction)
 		-- Chronomètre du tour : fin = maintenant + durée (horloge serveur synchronisée).
@@ -416,13 +434,19 @@ function CombatSession:_takeTurn(participant: CombatParticipant)
 		if not self._active then
 			return
 		end
+		usedAction = action
 		self:_applyAction(participant, action)
 		-- Réplique l'Essence/recharges mises à jour après résolution.
 		self:_firePlayerResources()
 	else
 		-- Ennemi : aucune IA au lot 02. Action neutre par défaut.
+		usedAction = ENEMY_DEFAULT_ACTION
 		self:_applyAction(participant, ENEMY_DEFAULT_ACTION)
 	end
+
+	-- Fin du tour personnel : décompte des recharges après la résolution, en
+	-- ignorant l'action armée ce tour-ci (affichage et timing cohérents).
+	self:_endPersonalTurn(participant, usedAction)
 end
 
 -- Attend le choix du joueur pendant TURN_SECONDS. À expiration : Garde automatique.
