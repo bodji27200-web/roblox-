@@ -73,6 +73,30 @@ export type CombatParticipant = {
 	-- État de manche : Garde active et verrou anti double-action.
 	isGuarding: boolean,
 	hasActedThisRound: boolean,
+	-- Lot 04 — Ressource Essence et recharges, autoritaires côté serveur.
+	essence: number,
+	-- Recharge restante par action (en tours personnels). 0/absent = disponible.
+	cooldowns: { [string]: number },
+	-- Nombre de tours personnels déjà joués par ce combattant.
+	personalTurns: number,
+}
+
+-- Lot 04 — Disponibilité d'une action telle que répliquée au client (affichage).
+export type ActionAvailability = {
+	cost: number,
+	cooldownRemaining: number,
+	available: boolean,
+}
+
+-- Lot 04 — Instantané des ressources du joueur, répliqué côté client (affichage seul).
+export type CombatResources = {
+	sessionId: string,
+	essence: number,
+	essenceMax: number,
+	-- Horodatage serveur synchronisé de la fin du tour (chronomètre), ou nil hors tour.
+	turnEndsAt: number?,
+	turnSeconds: number,
+	actions: { [string]: ActionAvailability },
 }
 
 -- Type vide retourné par ce module : seuls les types exportés ci-dessus sont utilisés.

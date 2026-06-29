@@ -90,6 +90,10 @@ local UIConfig = {
 		QtePlaceholder = "[ Emplacement QTE ]",
 		ChooseAction = "Choisissez votre action.",
 		NoCombat = "Aucun combat en cours.",
+		-- Lot 04 — Affichage des coûts, du sablier (recharge) et du chronomètre.
+		EssenceCost = "%d ✦", -- coût en Essence d'une action
+		Cooldown = "⌛ %d", -- recharge restante, en tours personnels
+		TurnTimer = "⏱ %ds", -- chronomètre du tour personnel
 	},
 
 	-- Les cinq actions du menu de droite. L'id est la valeur envoyée au serveur

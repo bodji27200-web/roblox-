@@ -18,6 +18,7 @@ local UI = Config.UI
 local Palette = UI.Palette
 local Layout = UI.Layout
 local Fonts = UI.Fonts
+local Labels = UI.Labels
 local ACTIONS = UI.Actions
 
 local ActionMenu = {}
@@ -30,6 +31,8 @@ function ActionMenu.new(parent: Instance, onAction: (string) -> ())
 	self._onAction = onAction
 	self._enabled = false
 	self._buttons = {} :: { [string]: TextButton }
+	-- Lot 04 — Disponibilité par action répliquée par le serveur (coût/recharge/dispo).
+	self._actions = {} :: { [string]: any }
 
 	local frame = Helpers.panel("ActionMenu")
 	frame.AnchorPoint = Vector2.new(1, 0.5)
@@ -74,13 +77,33 @@ function ActionMenu.new(parent: Instance, onAction: (string) -> ())
 		hint.Size = UDim2.new(0, 16, 0, 14)
 		hint.Parent = button
 
+		-- Lot 04 — Coût en Essence (bas-gauche), masqué si l'action est gratuite.
+		local costBadge = Helpers.label("CostBadge", "", Fonts.Body, 12)
+		costBadge.TextColor3 = Palette.EssenceFilled
+		costBadge.TextXAlignment = Enum.TextXAlignment.Left
+		costBadge.AnchorPoint = Vector2.new(0, 1)
+		costBadge.Position = UDim2.new(0, 6, 1, -3)
+		costBadge.Size = UDim2.new(0, 64, 0, 14)
+		costBadge.Visible = false
+		costBadge.Parent = button
+
+		-- Lot 04 — Sablier de recharge (bas-droite), masqué hors recharge.
+		local cooldownBadge = Helpers.label("CooldownBadge", "", Fonts.Value, 13)
+		cooldownBadge.TextColor3 = Palette.TextMuted
+		cooldownBadge.TextXAlignment = Enum.TextXAlignment.Right
+		cooldownBadge.AnchorPoint = Vector2.new(1, 1)
+		cooldownBadge.Position = UDim2.new(1, -6, 1, -3)
+		cooldownBadge.Size = UDim2.new(0, 56, 0, 14)
+		cooldownBadge.Visible = false
+		cooldownBadge.Parent = button
+
 		button.MouseEnter:Connect(function()
-			if self._enabled then
+			if self._enabled and self:_isAvailable(action.id) then
 				button.BackgroundColor3 = Palette.ButtonHover
 			end
 		end)
 		button.MouseLeave:Connect(function()
-			button.BackgroundColor3 = if self._enabled then Palette.ButtonEnabled else Palette.ButtonDisabled
+			self:_applyButtonVisual(action.id, button)
 		end)
 		button.Activated:Connect(function()
 			self:_trigger(action.id)
@@ -114,29 +137,78 @@ function ActionMenu.new(parent: Instance, onAction: (string) -> ())
 	return self
 end
 
--- Déclenche une action si le menu est actif.
+-- Une action est utilisable si le serveur n'a pas signalé d'indisponibilité
+-- (Essence suffisante et recharge écoulée). Sans donnée, on suppose disponible.
+function ActionMenu:_isAvailable(actionId: string): boolean
+	local info = self._actions[actionId]
+	if info == nil then
+		return true
+	end
+	return info.available ~= false
+end
+
+-- Applique l'apparence d'un bouton selon l'état (actif du combat + disponibilité).
+function ActionMenu:_applyButtonVisual(actionId: string, button: TextButton)
+	local usable = self._enabled and self:_isAvailable(actionId)
+	button.AutoButtonColor = false
+	button.Active = usable
+	button.Selectable = usable
+	button.BackgroundColor3 = if usable then Palette.ButtonEnabled else Palette.ButtonDisabled
+	button.TextColor3 = if usable then Palette.Text else Palette.TextMuted
+end
+
+-- Recalcule l'apparence de tous les boutons.
+function ActionMenu:_refreshButtons()
+	for actionId, button in self._buttons do
+		self:_applyButtonVisual(actionId, button)
+	end
+end
+
+-- Déclenche une action si le menu est actif et l'action disponible (validée serveur).
 function ActionMenu:_trigger(actionId: string)
-	if not self._enabled then
+	if not self._enabled or not self:_isAvailable(actionId) then
 		return
 	end
 	self._onAction(actionId)
 end
 
+-- Met à jour les badges coût/recharge depuis l'instantané de ressources serveur (lot 04).
+-- L'affichage suit la donnée répliquée : coût masqué si gratuit, sablier masqué hors recharge.
+function ActionMenu:setActions(actions: { [string]: any }?)
+	self._actions = actions or {}
+	for actionId, button in self._buttons do
+		local info = self._actions[actionId]
+		local cost = (info and info.cost) or 0
+		local cooldownRemaining = (info and info.cooldownRemaining) or 0
+
+		local costBadge = button:FindFirstChild("CostBadge") :: TextLabel?
+		if costBadge then
+			costBadge.Visible = cost > 0
+			if cost > 0 then
+				costBadge.Text = Labels.EssenceCost:format(cost)
+			end
+		end
+
+		local cooldownBadge = button:FindFirstChild("CooldownBadge") :: TextLabel?
+		if cooldownBadge then
+			cooldownBadge.Visible = cooldownRemaining > 0
+			if cooldownRemaining > 0 then
+				cooldownBadge.Text = Labels.Cooldown:format(cooldownRemaining)
+			end
+		end
+	end
+	self:_refreshButtons()
+end
+
 -- Active / désactive l'ensemble des boutons (selon le contexte de combat).
 function ActionMenu:setEnabled(enabled: boolean)
 	self._enabled = enabled
-	for _, button in self._buttons do
-		button.AutoButtonColor = false
-		button.Active = enabled
-		button.BackgroundColor3 = if enabled then Palette.ButtonEnabled else Palette.ButtonDisabled
-		button.TextColor3 = if enabled then Palette.Text else Palette.TextMuted
-		button.Selectable = enabled
-	end
+	self:_refreshButtons()
 
-	-- Bases manette : sélectionne par défaut le premier bouton quand le menu s'active.
+	-- Bases manette : sélectionne par défaut le premier bouton utilisable.
 	if enabled then
 		local first = self._buttons[ACTIONS[1].id]
-		if first then
+		if first and first.Active then
 			GuiService.SelectedObject = first
 		end
 	elseif GuiService.SelectedObject and self._buttons[GuiService.SelectedObject.Name] then

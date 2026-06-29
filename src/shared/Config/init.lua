@@ -7,6 +7,7 @@
 local Config = {
 	Combat = require(script.CombatConfig),
 	Essence = require(script.EssenceConfig),
+	ActionRules = require(script.ActionRulesConfig),
 	Epeiste = require(script.EpeisteConfig),
 	Creatures = require(script.CreaturesConfig),
 	UI = require(script.UIConfig),
