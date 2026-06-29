@@ -28,7 +28,10 @@ local EVENTS: { string } = {
 }
 
 local FUNCTIONS: { string } = {
-	-- (aucune RemoteFunction nécessaire pour le lot de fondation)
+	-- Lot 05 (sécurité) — Client -> serveur : demande de démarrage d'un QTE offensif.
+	-- Le serveur valide le tour et renvoie un défi unique (challengeId + fenêtre de temps)
+	-- ou un refus explicite. La soumission finale (PlayerOffensiveQte) cite ce challengeId.
+	"RequestOffensiveQte",
 }
 
 local FOLDER_NAME = "CombatRemotes"
@@ -83,6 +86,12 @@ end
 -- Accès générique à un remote par son nom (serveur ou client).
 function Remotes.get(name: string): Instance
 	return ensureChild(getFolder(), name, "RemoteEvent")
+end
+
+-- Accès à une RemoteFunction par son nom (serveur ou client). Utilisé par le flux de
+-- défi du QTE offensif (requête/réponse synchrone).
+function Remotes.getFunction(name: string): Instance
+	return ensureChild(getFolder(), name, "RemoteFunction")
 end
 
 return Remotes

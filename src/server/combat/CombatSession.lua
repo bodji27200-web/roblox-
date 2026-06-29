@@ -70,6 +70,10 @@ function CombatSession.new(service: any, player: Player, creatureKey: string)
 	-- Lot 05 — Verdict d'un QTE offensif en attente d'application (posé avant de
 	-- résoudre le tour, consommé dans _applyAction). nil si l'action n'a pas de QTE.
 	self._pendingOffensive = nil :: { action: string, outcome: string, multiplier: number, cancelled: boolean }?
+	-- Lot 05 (sécurité) — Défi QTE en cours (unique, lié à la session et au tour). Posé
+	-- par requestOffensiveQte, consommé (usage unique) par submitOffensiveQte. nil sinon.
+	self._qteChallenge = nil :: any
+	self._qteChallengeSeq = 0
 	-- Lot 04 — Horodatage serveur synchronisé de fin du tour joueur (chronomètre UI).
 	self._turnEndsAt = nil :: number?
 	-- Suivi pour le nettoyage fiable.
@@ -432,6 +436,9 @@ function CombatSession:_takeTurn(participant: CombatParticipant)
 	local usedAction: string?
 	if participant.side == "Player" then
 		self.state:transition(States.ChoosingAction)
+		-- Lot 05 (sécurité) — Tout défi QTE d'un tour précédent est invalidé à l'entrée
+		-- du nouveau tour (un défi reste lié au tour où il a été émis).
+		self._qteChallenge = nil
 		-- Chronomètre du tour : fin = maintenant + durée (horloge serveur synchronisée).
 		self._turnEndsAt = workspace:GetServerTimeNow() + TURN_SECONDS
 		self:_fireState()
@@ -533,7 +540,7 @@ end
 -- Applique le verdict d'un QTE offensif déjà calculé (autoritaire).
 -- Dans TOUS les cas le tour et les ressources sont consommés : c'est `cancelled` qui
 -- distingue une annulation (aucun gain d'Essence d'attaque, aucun dégât, animation
--- d'échec côté client) d'une attaque réussie (dégâts éventuellement bonifiés de +20 %).
+-- d'échec côté client) d'une attaque réussie (dégâts bonifiés du bonus parfait configuré).
 function CombatSession:_resolveOffensive(participant: CombatParticipant, action: string, offensive: any)
 	local cancelled: boolean = offensive.cancelled == true
 
@@ -586,6 +593,7 @@ function CombatSession:_fireOffensiveOutcome(action: string, outcome: string, mu
 		remote:FireClient(self.player, {
 			sessionId = self.id,
 			action = action,
+			accepted = true,
 			outcome = outcome,
 			multiplier = multiplier,
 			damage = damage,
@@ -721,6 +729,15 @@ function CombatSession:submitAction(player: Player, action: string): boolean
 		return false
 	end
 
+	-- Lot 05 (sécurité) — Une action à QTE offensif ne peut PAS être résolue par la voie
+	-- générique : elle doit obligatoirement passer par le flux de défi QTE
+	-- (requestOffensiveQte puis submitOffensiveQte). On rejette donc « Attaque » & co.
+	-- ici pour empêcher tout contournement du QTE via PlayerCombatAction.
+	if Qte.profileForAction(action) then
+		print(("[CombatSession %s] Action « %s » refusée : QTE offensif obligatoire."):format(self.id, action))
+		return false
+	end
+
 	-- Lot 04 — Validation autoritaire du coût/recharge : une action trop chère ou
 	-- encore en recharge est refusée. Le tour reste en attente (le joueur peut
 	-- rechoisir) ; on réplique l'état des ressources pour rafraîchir l'UI.
@@ -738,14 +755,102 @@ function CombatSession:submitAction(player: Player, action: string): boolean
 	return true
 end
 
--- Soumission du résultat d'un QTE offensif par le joueur (Lot 05). Le serveur fait
--- autorité : il revérifie le tour, valide l'usage de l'action, puis RECALCULE le
--- verdict à partir des seules positions des curseurs (il ne fait jamais confiance à un
--- verdict envoyé par le client). Validation raisonnable (pas d'anti-cheat lourd) :
---   * structure de la charge utile et nombre de curseurs conformes au profil ;
---   * positions bornées à [0, 1] ; un curseur non arrêté compte comme « hors zone ».
--- Une charge utile structurellement incohérente est ignorée (le tour reste en attente :
--- le joueur peut rejouer), comme pour une action invalide.
+-- Fenêtre d'expiration (secondes) d'un défi QTE pour un profil. Calée sur la durée
+-- théorique au réglage de vitesse le PLUS LENT de l'outil dev (pour ne pas rejeter à
+-- tort un QTE ralenti pendant un test), plus une marge réseau. Au-delà, un défi rejoué
+-- plus tard est rejeté.
+function CombatSession:_qteWindowSeconds(profile: any): number
+	local count = profile.cursorCount
+	local theoretical = (profile.cursorSeconds * count + profile.spacingSeconds * math.max(0, count - 1))
+		/ QteConfig.Dev.MIN_SPEED_MULTIPLIER
+	return theoretical + QteConfig.Challenge.EXTRA_SECONDS
+end
+
+-- Lot 05 (sécurité) — Demande de démarrage d'un QTE offensif (RemoteFunction). Le serveur
+-- valide le tour courant et l'action, puis émet un DÉFI unique lié à la session et au tour
+-- (challengeId, action, manche, tour personnel, startedAt, expiresAt). Retourne une réponse
+-- EXPLICITE (accepted true/false + reason) : le client ne reste jamais bloqué en attente.
+function CombatSession:requestOffensiveQte(player: Player, action: any): { [string]: any }
+	if not self._active then
+		return { accepted = false, reason = "inactive" }
+	end
+	if player ~= self.player then
+		return { accepted = false, reason = "player" }
+	end
+	if self.state:get() ~= States.ChoosingAction or not self._resolveTurn then
+		return { accepted = false, reason = "no-turn" }
+	end
+	if type(action) ~= "string" then
+		return { accepted = false, reason = "action" }
+	end
+
+	local profile = Qte.profileForAction(action)
+	if not profile then
+		return { accepted = false, reason = "no-profile" }
+	end
+
+	local participant = self:_playerParticipant()
+	if not participant then
+		return { accepted = false, reason = "no-participant" }
+	end
+
+	local allowed, reason = self:_canUseAction(participant, action)
+	if not allowed then
+		self:_firePlayerResources()
+		return { accepted = false, reason = reason or "unusable" }
+	end
+
+	-- Émission d'un défi unique (usage unique, lié au tour courant).
+	self._qteChallengeSeq += 1
+	local now = workspace:GetServerTimeNow()
+	local challenge = {
+		id = ("%s-qte-%d"):format(self.id, self._qteChallengeSeq),
+		action = action,
+		round = self.round,
+		personalTurn = participant.personalTurns,
+		startedAt = now,
+		expiresAt = now + self:_qteWindowSeconds(profile),
+	}
+	self._qteChallenge = challenge
+
+	print(("[CombatSession %s] Défi QTE « %s » émis (%s)."):format(self.id, action, challenge.id))
+
+	return {
+		accepted = true,
+		challengeId = challenge.id,
+		action = action,
+		round = challenge.round,
+		startedAt = challenge.startedAt,
+		expiresAt = challenge.expiresAt,
+	}
+end
+
+-- Refus explicite d'une soumission de QTE offensif : prévient le client (pour qu'il
+-- débloque son menu) sans résoudre le tour (le joueur peut rejouer dans le même tour).
+function CombatSession:_rejectOffensive(action: any, reason: string)
+	print(("[CombatSession %s] QTE offensif rejeté (%s)."):format(self.id, tostring(reason)))
+	local ok, remote = pcall(function()
+		return Remotes.get("OffensiveQteOutcome")
+	end)
+	if ok and remote and remote:IsA("RemoteEvent") and self.player and self.player.Parent then
+		remote:FireClient(self.player, {
+			sessionId = self.id,
+			action = if type(action) == "string" then action else nil,
+			accepted = false,
+			reason = tostring(reason),
+		})
+	end
+end
+
+-- Soumission finale du résultat d'un QTE offensif (Lot 05, sécurisé). Le serveur fait
+-- autorité de bout en bout :
+--   * le défi (challengeId) doit exister, correspondre à l'action et au TOUR courant,
+--     ne pas être expiré, et n'avoir jamais servi (usage unique) ;
+--   * les positions NaN/infinies/hors [0, 1] sont REJETÉES (aucune correction) ;
+--   * la durée physique du QTE est validée raisonnablement (ni instantanée, ni au-delà
+--     de la fenêtre du défi) ;
+--   * le verdict est RECALCULÉ à partir des seules positions (jamais d'un verdict client).
+-- Tout rejet renvoie une réponse explicite au client.
 function CombatSession:submitOffensiveQte(player: Player, payload: any): boolean
 	if not self._active then
 		return false
@@ -753,54 +858,134 @@ function CombatSession:submitOffensiveQte(player: Player, payload: any): boolean
 	if player ~= self.player then
 		return false
 	end
-	if self.state:get() ~= States.ChoosingAction then
-		return false
-	end
-	local resolve = self._resolveTurn
-	if not resolve then
-		return false
-	end
 	if type(payload) ~= "table" then
 		return false
 	end
 
 	local action = payload.action
-	if type(action) ~= "string" then
+
+	-- Un tour doit être réellement en attente, sinon le défi ne correspond plus.
+	if self.state:get() ~= States.ChoosingAction or not self._resolveTurn then
+		self:_rejectOffensive(action, "no-turn")
 		return false
 	end
 
-	-- L'action doit posséder un profil de QTE offensif (sinon ce n'est pas un QTE).
+	-- 1) Défi : présent, identifiant correspondant.
+	local challenge = self._qteChallenge
+	local challengeId = payload.challengeId
+	if type(challengeId) ~= "string" or not challenge or challenge.id ~= challengeId then
+		self:_rejectOffensive(action, "challenge")
+		return false
+	end
+
+	-- 2) Action conforme au défi.
+	if type(action) ~= "string" or action ~= challenge.action then
+		self:_rejectOffensive(action, "action-mismatch")
+		return false
+	end
+
 	local profile = Qte.profileForAction(action)
 	if not profile then
+		self._qteChallenge = nil
+		self:_rejectOffensive(action, "no-profile")
 		return false
 	end
 
-	-- Validation Essence/recharge identique aux autres actions (autoritaire).
 	local participant = self:_playerParticipant()
-	if participant then
-		local allowed, reason = self:_canUseAction(participant, action)
-		if not allowed then
-			print(("[CombatSession %s] QTE « %s » refusé (%s)."):format(self.id, action, tostring(reason)))
-			self:_firePlayerResources()
+	if not participant then
+		self._qteChallenge = nil
+		self:_rejectOffensive(action, "no-participant")
+		return false
+	end
+
+	-- 3) Le défi doit correspondre au TOUR courant (même manche et même tour personnel).
+	if challenge.round ~= self.round or challenge.personalTurn ~= participant.personalTurns then
+		self._qteChallenge = nil
+		self:_rejectOffensive(action, "stale-turn")
+		return false
+	end
+
+	-- 4) Expiration et durée physique raisonnable (anti-rejeu / anti-instantané).
+	local now = workspace:GetServerTimeNow()
+	if now > challenge.expiresAt then
+		self._qteChallenge = nil
+		self:_rejectOffensive(action, "expired")
+		return false
+	end
+	local serverElapsed = now - challenge.startedAt
+	if serverElapsed < QteConfig.Challenge.MIN_PHYSICAL_SECONDS then
+		self._qteChallenge = nil
+		self:_rejectOffensive(action, "too-fast")
+		return false
+	end
+
+	-- 5) Validation Essence/recharge (autoritaire).
+	local allowed, reason = self:_canUseAction(participant, action)
+	if not allowed then
+		self._qteChallenge = nil
+		self:_firePlayerResources()
+		self:_rejectOffensive(action, reason or "unusable")
+		return false
+	end
+
+	-- 6) Curseurs : nombre exact et positions STRICTEMENT valides (pas de clamp).
+	local cursors = payload.cursors
+	if type(cursors) ~= "table" or #cursors ~= profile.cursorCount then
+		self._qteChallenge = nil
+		self:_rejectOffensive(action, "cursor-count")
+		return false
+	end
+
+	local positions: { number? } = {}
+	for i = 1, profile.cursorCount do
+		local cursor = cursors[i]
+		if type(cursor) ~= "table" then
+			self._qteChallenge = nil
+			self:_rejectOffensive(action, "cursor-shape")
+			return false
+		end
+		if cursor.stopped == true then
+			local pos = cursor.position
+			-- Rejet strict : NaN (pos ~= pos), ±infini, ou hors de [0, 1].
+			if type(pos) ~= "number"
+				or pos ~= pos
+				or pos == math.huge
+				or pos == -math.huge
+				or pos < 0
+				or pos > 1
+			then
+				self._qteChallenge = nil
+				self:_rejectOffensive(action, "bad-position")
+				return false
+			end
+			positions[i] = pos
+		elseif cursor.stopped == false then
+			-- Curseur non arrêté (pas de clic) : compté comme hors zone.
+			positions[i] = nil
+		else
+			self._qteChallenge = nil
+			self:_rejectOffensive(action, "cursor-stopped")
 			return false
 		end
 	end
 
-	-- Le nombre de curseurs doit correspondre au profil (rejet d'une réponse forgée).
-	local cursors = payload.cursors
-	if type(cursors) ~= "table" or #cursors ~= profile.cursorCount then
-		print(("[CombatSession %s] QTE « %s » incohérent (curseurs)."):format(self.id, action))
-		return false
+	-- 7) Durée physique annoncée par le client (si fournie) : finie, positive et
+	-- cohérente avec le temps réellement observé côté serveur.
+	local clientDuration = payload.duration
+	if clientDuration ~= nil then
+		if type(clientDuration) ~= "number"
+			or clientDuration ~= clientDuration
+			or clientDuration < 0
+			or clientDuration > serverElapsed + QteConfig.Challenge.EXTRA_SECONDS
+		then
+			self._qteChallenge = nil
+			self:_rejectOffensive(action, "bad-duration")
+			return false
+		end
 	end
 
-	-- Reconstruit les positions arrêtées (bornées) ; un curseur non arrêté = hors zone.
-	local positions: { number? } = {}
-	for i = 1, profile.cursorCount do
-		local cursor = cursors[i]
-		local stopped = type(cursor) == "table" and cursor.stopped == true
-		local pos = stopped and type(cursor.position) == "number" and math.clamp(cursor.position, 0, 1) or nil
-		positions[i] = pos
-	end
+	-- Défi consommé : usage unique (toute nouvelle soumission du même id sera rejetée).
+	self._qteChallenge = nil
 
 	-- Verdict recalculé côté serveur à partir des positions (source autoritaire).
 	local result = Qte.computeOutcome(profile, positions)
@@ -811,6 +996,7 @@ function CombatSession:submitOffensiveQte(player: Player, payload: any): boolean
 		cancelled = result.cancelled,
 	}
 
+	local resolve = self._resolveTurn
 	resolve(action)
 	return true
 end

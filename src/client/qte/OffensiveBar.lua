@@ -21,6 +21,9 @@ type QteZone = Types.QteZone
 local Palette = Config.UI.Palette
 local Fonts = Config.UI.Fonts
 
+-- Bonus d'attaque parfaite affiché, dérivé de la configuration (jamais écrit en dur).
+local PERFECT_BONUS_PERCENT = math.floor(Config.Combat.PERFECT_ATTACK_DAMAGE_BONUS * 100 + 0.5)
+
 -- Couleurs des zones et des marqueurs (placeholder, cohérent avec la palette du HUD).
 local RED_ZONE = Color3.fromRGB(170, 65, 65)
 local YELLOW_ZONE = Color3.fromRGB(232, 200, 92)
@@ -214,7 +217,7 @@ function OffensiveBar:setVerdict(outcome: string?)
 		return
 	end
 	local labels = {
-		Perfect = "Parfait ! (+20 % dégâts)",
+		Perfect = ("Parfait ! (+%d %% dégâts)"):format(PERFECT_BONUS_PERCENT),
 		Normal = "Attaque normale",
 		Cancelled = "Attaque annulée !",
 	}
